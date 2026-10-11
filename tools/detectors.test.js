@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -111,4 +111,80 @@ test('page is split by edge colour and by wide empty gaps, independent of page h
     assert.ok(bands.some((band) => band.y >= 300 && band.y < 400 + 100 && band.background === '#f4f7fa'));
     const body = bands.filter((band) => band.background === '#f4f7fa');
     assert.ok(body.length >= 2, 'two cards separated by a wide gap are two sections');
+});
+
+function textLines(width, height, lineHeight, gap, ink = [0, 0, 0], paper = [255, 255, 255]) {
+    const image = canvas(width, height, paper);
+    for (let top = 10; top + lineHeight < height; top += lineHeight + gap) {
+        for (let x = 8; x < width - 8; x += 6) fill(image, x, top, 2, lineHeight, ink);
+    }
+    return image;
+}
+
+test('Lanczos resampling keeps flat colour exact and produces the requested size', () => {
+    const image = canvas(20, 10, [31, 138, 76]);
+    const up = resampleLanczos(image.data, 20, 10, 80, 40);
+    assert.equal(up.length, 80 * 40 * 4);
+    for (let index = 0; index < up.length; index += 4) {
+        assert.ok(Math.abs(up[index] - 31) <= 1 && Math.abs(up[index + 1] - 138) <= 1 && Math.abs(up[index + 2] - 76) <= 1);
+    }
+});
+
+test('upscaling keeps a hard edge hard instead of smearing it', () => {
+    const image = canvas(40, 4, [255, 255, 255]);
+    fill(image, 20, 0, 20, 4, [0, 0, 0]);
+    const up = resampleLanczos(image.data, 40, 4, 160, 16);
+    const at = (x) => up[(8 * 160 + x) * 4];
+    assert.ok(at(60) > 250 && at(100) < 5);
+    const transition = Array.from({ length: 160 }, (_, x) => at(x)).filter((value) => value > 20 && value < 235).length;
+    assert.ok(transition <= 8, 'edge transition spans only a few pixels, got ' + transition);
+});
+
+test('semi-transparent pixels are flattened to opaque ones that keep text visible', () => {
+    const data = new Uint8ClampedArray([0, 0, 0, 0, 20, 20, 20, 255, 240, 240, 240, 128, 255, 255, 255, 255]);
+    const flat = flattenAlpha(data);
+    for (let index = 3; index < flat.length; index += 4) assert.equal(flat[index], 255);
+});
+
+test('text line height is measured from vertical strokes and ignores horizontal borders', () => {
+    const image = textLines(400, 300, 14, 10);
+    fill(image, 0, 150, 400, 2, [0, 0, 0]);
+    assert.ok(Math.abs(estimateTextHeight(image.data, 400, 300) - 14) <= 2);
+});
+
+test('scale follows text size: small text is enlarged, readable text and huge images are left alone', () => {
+    assert.equal(chooseOcrScale(0, 300, 300), 1);
+    assert.equal(chooseOcrScale(34, 1200, 3000), 1);
+    const small = chooseOcrScale(8, 300, 700);
+    assert.ok(small >= 3.5 && small <= 4);
+    assert.equal(chooseOcrScale(10, 3000, 9000), 1, 'an image already over the pixel budget is not enlarged');
+    const budgeted = chooseOcrScale(10, 1500, 3000);
+    assert.ok(budgeted > 1 && budgeted * budgeted * 1500 * 3000 <= 16000000 * 1.01);
+});
+
+test('prepareForOcr enlarges small text and reports the applied scale', () => {
+    const small = textLines(200, 160, 8, 8);
+    const result = prepareForOcr(small.data, 200, 160);
+    assert.ok(result.scale > 1.5);
+    assert.equal(result.width, Math.round(200 * result.scale));
+    const readable = textLines(300, 300, 36, 20);
+    assert.equal(prepareForOcr(readable.data, 300, 300).scale, 1);
+});
+
+test('a dark frame around the screenshot does not hide the text line height', () => {
+    const image = textLines(310, 400, 8, 12);
+    fill(image, 0, 0, 3, 400, [0, 0, 0]);
+    fill(image, 307, 0, 3, 400, [0, 0, 0]);
+    const height = estimateTextHeight(image.data, 310, 400);
+    assert.ok(height >= 6 && height <= 10, 'measured ' + height);
+    assert.ok(prepareForOcr(image.data, 310, 400).scale >= 3.5);
+});
+
+test('merging OCR passes keeps the more confident reading of the same word and adds words only one pass found', () => {
+    const { mergeWordPasses } = require('../assets/detectors');
+    const merged = mergeWordPasses([
+        [{ text: 'Sernices', x: 10, y: 10, width: 60, height: 14, confidence: 41 }, { text: 'Work', x: 100, y: 10, width: 40, height: 14, confidence: 90 }],
+        [{ text: 'Services', x: 11, y: 10, width: 60, height: 14, confidence: 88 }, { text: 'Contact', x: 10, y: 80, width: 60, height: 14, confidence: 70 }]
+    ]);
+    assert.deepEqual(merged.map((word) => word.text), ['Services', 'Work', 'Contact']);
 });

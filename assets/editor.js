@@ -839,31 +839,53 @@
         });
     }
 
+    function pixelsToCanvas(prepared) {
+        var target = document.createElement('canvas');
+        target.width = prepared.width;
+        target.height = prepared.height;
+        target.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(prepared.data), prepared.width, prepared.height), 0, 0);
+        return target;
+    }
+
+    // The input is judged from its decoded pixels (not its file format): text size picks the enlargement, small text gets
+    // two differently-processed passes whose words are merged by confidence.
     function recognizeScreenshot(canvas) {
-        var scale = canvas.width < 1200 ? 2 : 1;
-        var ocrCanvas = document.createElement('canvas');
-        ocrCanvas.width = canvas.width * scale;
-        ocrCanvas.height = canvas.height * scale;
-        var ocrContext = ocrCanvas.getContext('2d');
-        ocrContext.imageSmoothingEnabled = false;
-        ocrContext.drawImage(canvas, 0, 0, ocrCanvas.width, ocrCanvas.height);
+        var tools = window.PageGeneratorDetectors;
+        var image = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
+        var prepared = tools ? tools.prepareForOcr(image.data, canvas.width, canvas.height) : null;
+        if (!prepared) {
+            prepared = { data: image.data, width: canvas.width, height: canvas.height, scale: 1, textHeight: 0 };
+        }
+        var variants = [prepared];
+        if (tools && prepared.scale > 1 && prepared.textHeight > 0 && prepared.textHeight < 16) {
+            variants.push(tools.prepareForOcr(image.data, canvas.width, canvas.height, { sharpen: false, scale: prepared.scale }));
+        }
         return Tesseract.createWorker(PageGeneratorConfig.ocrLanguages || 'ukr+eng')
             .then(function (worker) {
-                return worker.recognize(ocrCanvas).then(function (result) {
-                    return worker.terminate().then(function () {
-                        return (result.data.words || []).filter(function (word) {
-                            return word.text && word.confidence >= 25;
-                        }).map(function (word) {
-                            return {
-                                text: word.text.trim(),
-                                x: Math.round(word.bbox.x0 / scale),
-                                y: Math.round(word.bbox.y0 / scale),
-                                width: Math.round((word.bbox.x1 - word.bbox.x0) / scale),
-                                height: Math.round((word.bbox.y1 - word.bbox.y0) / scale),
-                                confidence: word.confidence
-                            };
+                var passes = [];
+                var chain = Promise.resolve();
+                variants.forEach(function (variant) {
+                    chain = chain.then(function () {
+                        return worker.recognize(pixelsToCanvas(variant)).then(function (result) {
+                            passes.push((result.data.words || []).filter(function (word) {
+                                return word.text && word.confidence >= 25;
+                            }).map(function (word) {
+                                return {
+                                    text: word.text.trim(),
+                                    x: Math.round(word.bbox.x0 / variant.scale),
+                                    y: Math.round(word.bbox.y0 / variant.scale),
+                                    width: Math.round((word.bbox.x1 - word.bbox.x0) / variant.scale),
+                                    height: Math.round((word.bbox.y1 - word.bbox.y0) / variant.scale),
+                                    confidence: word.confidence
+                                };
+                            }));
                         });
                     });
+                });
+                return chain.then(function () {
+                    return worker.terminate();
+                }).then(function () {
+                    return passes.length > 1 ? tools.mergeWordPasses(passes) : passes[0];
                 });
             });
     }
@@ -912,7 +934,15 @@
                     crop.width = Math.round(plate.width * scale);
                     crop.height = Math.round(plate.height * scale);
                     var context = crop.getContext('2d', { willReadFrequently: true });
-                    context.drawImage(canvas, plate.x, plate.y, plate.width, plate.height, 0, 0, crop.width, crop.height);
+                    var region = canvas.getContext('2d', { willReadFrequently: true }).getImageData(plate.x, plate.y, plate.width, plate.height);
+                    if (window.PageGeneratorDetectors) {
+                        context.putImageData(new ImageData(
+                            window.PageGeneratorDetectors.resampleLanczos(region.data, plate.width, plate.height, crop.width, crop.height),
+                            crop.width, crop.height
+                        ), 0, 0);
+                    } else {
+                        context.drawImage(canvas, plate.x, plate.y, plate.width, plate.height, 0, 0, crop.width, crop.height);
+                    }
                     var image = context.getImageData(0, 0, crop.width, crop.height);
                     for (var index = 0; index < image.data.length; index += 4) {
                         var distance = Math.abs(image.data[index] - plate.fill[0]) + Math.abs(image.data[index + 1] - plate.fill[1]) + Math.abs(image.data[index + 2] - plate.fill[2]);

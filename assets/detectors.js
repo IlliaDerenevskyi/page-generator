@@ -358,6 +358,256 @@
         return merged;
     }
 
+    // ---- OCR input preparation -------------------------------------------------------------------------------------------
+    // Works on decoded RGBA pixels only, so it behaves the same for PNG, JPEG, WebP, screenshots or exports.
+
+    // Semi-transparent pixels are composited onto a colour that keeps text visible (dark under light content, white otherwise).
+    function flattenAlpha(data) {
+        var transparent = false;
+        var lightSum = 0;
+        var opaque = 0;
+        for (var index = 0; index < data.length; index += 4) {
+            if (data[index + 3] < 255) transparent = true;
+            if (data[index + 3] > 200) {
+                lightSum += data[index] * .299 + data[index + 1] * .587 + data[index + 2] * .114;
+                opaque += 1;
+            }
+        }
+        if (!transparent) return data;
+        var base = opaque && lightSum / opaque > 190 ? [17, 24, 39] : [255, 255, 255];
+        var out = new Uint8ClampedArray(data.length);
+        for (var offset = 0; offset < data.length; offset += 4) {
+            var alpha = data[offset + 3] / 255;
+            out[offset] = data[offset] * alpha + base[0] * (1 - alpha);
+            out[offset + 1] = data[offset + 1] * alpha + base[1] * (1 - alpha);
+            out[offset + 2] = data[offset + 2] * alpha + base[2] * (1 - alpha);
+            out[offset + 3] = 255;
+        }
+        return out;
+    }
+
+    // Typical height (px) of an ink line, from rows that contain vertical strokes. Horizontal borders do not count,
+    // and neither do columns that are an edge on nearly every row (a screenshot frame or a vertical rule).
+    function estimateTextHeight(data, width, height) {
+        var luma = new Float32Array(width * height);
+        for (var pixel = 0; pixel < luma.length; pixel += 1) {
+            luma[pixel] = data[pixel * 4] * .299 + data[pixel * 4 + 1] * .587 + data[pixel * 4 + 2] * .114;
+        }
+        var edge = new Uint8Array(width * height);
+        var columnEdges = new Uint32Array(width);
+        for (var row = 0; row < height; row += 1) {
+            for (var column = 1; column < width; column += 1) {
+                if (Math.abs(luma[row * width + column] - luma[row * width + column - 1]) > 40) {
+                    edge[row * width + column] = 1;
+                    columnEdges[column] += 1;
+                }
+            }
+        }
+        var ruled = new Uint8Array(width);
+        for (var check = 0; check < width; check += 1) {
+            if (columnEdges[check] > height * .85) {
+                ruled[check] = 1;
+                if (check + 1 < width) ruled[check + 1] = 1;
+            }
+        }
+        var minEdges = Math.max(3, Math.round(width * .004));
+        var heights = [];
+        var run = 0;
+        var gap = 0;
+        for (var y = 0; y <= height; y += 1) {
+            var edges = 0;
+            if (y < height) {
+                for (var x = 1; x < width; x += 1) {
+                    if (edge[y * width + x] && !ruled[x]) edges += 1;
+                }
+            }
+            if (edges >= minEdges) {
+                run += gap + 1;
+                gap = 0;
+            } else if (run) {
+                gap += 1;
+                if (gap > 2 || y === height) {
+                    if (run >= 5 && run <= 120) heights.push(run);
+                    run = 0;
+                    gap = 0;
+                }
+            }
+        }
+        if (!heights.length) return 0;
+        heights.sort(function (a, b) { return a - b; });
+        return heights[Math.floor(heights.length / 2)];
+    }
+
+    // Upscale only when text is below what the OCR engine reads reliably; never more than needed, never beyond the pixel budget.
+    function chooseOcrScale(textHeight, width, height, options) {
+        var target = options && options.target || 40;
+        var comfortable = options && options.comfortable || 30;
+        var maxPixels = options && options.maxPixels || 16000000;
+        if (!textHeight || textHeight >= comfortable) return 1;
+        var scale = Math.min(4, target / textHeight);
+        scale = Math.min(scale, Math.sqrt(maxPixels / Math.max(1, width * height)));
+        return scale < 1.15 ? 1 : Math.floor(scale * 4) / 4;
+    }
+
+    function lanczos(value, support) {
+        if (value === 0) return 1;
+        if (value <= -support || value >= support) return 0;
+        var scaled = Math.PI * value;
+        return support * Math.sin(scaled) * Math.sin(scaled / support) / (scaled * scaled);
+    }
+
+    function axisWeights(sourceSize, targetSize, support) {
+        var ratio = sourceSize / targetSize;
+        var filterScale = Math.max(1, ratio);
+        var radius = support * filterScale;
+        var starts = new Int32Array(targetSize);
+        var counts = new Int32Array(targetSize);
+        var weights = [];
+        for (var index = 0; index < targetSize; index += 1) {
+            var center = (index + .5) * ratio - .5;
+            var first = Math.max(0, Math.floor(center - radius + 1));
+            var last = Math.min(sourceSize - 1, Math.floor(center + radius));
+            var list = [];
+            var sum = 0;
+            for (var tap = first; tap <= last; tap += 1) {
+                var weight = lanczos((tap - center) / filterScale, support);
+                list.push(weight);
+                sum += weight;
+            }
+            starts[index] = first;
+            counts[index] = list.length;
+            weights.push(list.map(function (weight) { return sum ? weight / sum : 0; }));
+        }
+        return { starts: starts, counts: counts, weights: weights };
+    }
+
+    // Separable Lanczos-3 resampling of RGBA data (up or down).
+    function resampleLanczos(data, width, height, targetWidth, targetHeight) {
+        var horizontal = axisWeights(width, targetWidth, 3);
+        var vertical = axisWeights(height, targetHeight, 3);
+        var middle = new Float32Array(targetWidth * height * 3);
+        for (var y = 0; y < height; y += 1) {
+            for (var x = 0; x < targetWidth; x += 1) {
+                var red = 0, green = 0, blue = 0;
+                var start = horizontal.starts[x];
+                var list = horizontal.weights[x];
+                for (var tap = 0; tap < list.length; tap += 1) {
+                    var offset = (y * width + start + tap) * 4;
+                    red += data[offset] * list[tap];
+                    green += data[offset + 1] * list[tap];
+                    blue += data[offset + 2] * list[tap];
+                }
+                var target = (y * targetWidth + x) * 3;
+                middle[target] = red;
+                middle[target + 1] = green;
+                middle[target + 2] = blue;
+            }
+        }
+        var out = new Uint8ClampedArray(targetWidth * targetHeight * 4);
+        for (var row = 0; row < targetHeight; row += 1) {
+            var rowStart = vertical.starts[row];
+            var rowWeights = vertical.weights[row];
+            for (var column = 0; column < targetWidth; column += 1) {
+                var r = 0, g = 0, b = 0;
+                for (var step = 0; step < rowWeights.length; step += 1) {
+                    var source = ((rowStart + step) * targetWidth + column) * 3;
+                    r += middle[source] * rowWeights[step];
+                    g += middle[source + 1] * rowWeights[step];
+                    b += middle[source + 2] * rowWeights[step];
+                }
+                var destination = (row * targetWidth + column) * 4;
+                out[destination] = r;
+                out[destination + 1] = g;
+                out[destination + 2] = b;
+                out[destination + 3] = 255;
+            }
+        }
+        return out;
+    }
+
+    // Unsharp mask on luminance, with a threshold so flat areas and compression noise are not amplified.
+    function sharpen(data, width, height, amount, sigma, threshold) {
+        var radius = Math.max(1, Math.ceil(sigma * 3));
+        var kernel = [];
+        var total = 0;
+        for (var tap = -radius; tap <= radius; tap += 1) {
+            var weight = Math.exp(-(tap * tap) / (2 * sigma * sigma));
+            kernel.push(weight);
+            total += weight;
+        }
+        kernel = kernel.map(function (weight) { return weight / total; });
+        var luma = new Float32Array(width * height);
+        for (var pixel = 0; pixel < luma.length; pixel += 1) {
+            luma[pixel] = data[pixel * 4] * .299 + data[pixel * 4 + 1] * .587 + data[pixel * 4 + 2] * .114;
+        }
+        var pass = new Float32Array(luma.length);
+        for (var y = 0; y < height; y += 1) {
+            for (var x = 0; x < width; x += 1) {
+                var sum = 0;
+                for (var k = -radius; k <= radius; k += 1) {
+                    sum += luma[y * width + Math.min(width - 1, Math.max(0, x + k))] * kernel[k + radius];
+                }
+                pass[y * width + x] = sum;
+            }
+        }
+        var out = new Uint8ClampedArray(data);
+        for (var row = 0; row < height; row += 1) {
+            for (var column = 0; column < width; column += 1) {
+                var blurred = 0;
+                for (var s = -radius; s <= radius; s += 1) {
+                    blurred += pass[Math.min(height - 1, Math.max(0, row + s)) * width + column] * kernel[s + radius];
+                }
+                var index = row * width + column;
+                var difference = luma[index] - blurred;
+                if (Math.abs(difference) <= threshold) continue;
+                var delta = difference * amount;
+                out[index * 4] += delta;
+                out[index * 4 + 1] += delta;
+                out[index * 4 + 2] += delta;
+            }
+        }
+        return out;
+    }
+
+    function prepareForOcr(data, width, height, options) {
+        var settings = options || {};
+        var flat = flattenAlpha(data);
+        var textHeight = estimateTextHeight(flat, width, height);
+        var scale = settings.scale || chooseOcrScale(textHeight, width, height, settings);
+        if (scale <= 1) {
+            return { data: flat, width: width, height: height, scale: 1, textHeight: textHeight };
+        }
+        var targetWidth = Math.round(width * scale);
+        var targetHeight = Math.round(height * scale);
+        var scaled = resampleLanczos(flat, width, height, targetWidth, targetHeight);
+        if (settings.sharpen !== false) {
+            scaled = sharpen(scaled, targetWidth, targetHeight, settings.amount || .6, Math.max(.8, scale * .45), 3);
+        }
+        return { data: scaled, width: targetWidth, height: targetHeight, scale: targetWidth / width, textHeight: textHeight };
+    }
+
+    // Several OCR passes over the same image: keep the most confident reading wherever passes found the same word.
+    function mergeWordPasses(passes) {
+        var all = [];
+        passes.forEach(function (words) { (words || []).forEach(function (word) { all.push(word); }); });
+        all.sort(function (a, b) { return (b.confidence || 0) - (a.confidence || 0); });
+        var kept = [];
+        all.forEach(function (word) {
+            var overlaps = kept.some(function (other) {
+                var left = Math.max(word.x, other.x);
+                var top = Math.max(word.y, other.y);
+                var right = Math.min(word.x + word.width, other.x + other.width);
+                var bottom = Math.min(word.y + word.height, other.y + other.height);
+                if (right <= left || bottom <= top) return false;
+                var shared = (right - left) * (bottom - top);
+                var smaller = Math.min(word.width * word.height, other.width * other.height);
+                return shared / Math.max(1, smaller) > .5;
+            });
+            if (!overlaps) kept.push(word);
+        });
+        return kept.sort(function (a, b) { return a.y - b.y || a.x - b.x; });
+    }
+
     return {
         detectSurfaces: detectSurfaces,
         classifySurfaces: classifySurfaces,
@@ -365,6 +615,13 @@
         dominantShare: dominantShare,
         isPhotographic: isPhotographic,
         groupWordsIntoLines: groupWordsIntoLines,
-        detectBands: detectBands
+        detectBands: detectBands,
+        flattenAlpha: flattenAlpha,
+        estimateTextHeight: estimateTextHeight,
+        chooseOcrScale: chooseOcrScale,
+        resampleLanczos: resampleLanczos,
+        sharpen: sharpen,
+        prepareForOcr: prepareForOcr,
+        mergeWordPasses: mergeWordPasses
     };
 }));

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Page Generator
  * Description: Deterministic page importer for Figma and screenshots with Elementor and WordPress output.
- * Version: 3.4.1
+ * Version: 3.4.2
  * Author: Dym
  */
 
@@ -13,7 +13,7 @@ require_once __DIR__ . '/includes/native-blocks.php';
 final class Page_Generator_Plugin {
     use Page_Generator_Native_Blocks;
 
-    const VERSION = '3.4.1';
+    const VERSION = '3.4.2';
     const OPTION = 'page_generator_settings';
     const NONCE = 'page_generator_nonce';
 
