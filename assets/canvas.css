@@ -1,0 +1,76 @@
+/* Shared by the frontend and the block editor iframe. All pixel values are source pixels scaled by the canvas width. */
+.page-generator-canvas {
+    position: relative;
+    container-type: inline-size;
+    width: 100%;
+    max-width: var(--pg-max, 1200px);
+    margin-left: auto;
+    margin-right: auto;
+    aspect-ratio: var(--pg-w) / var(--pg-h);
+    overflow: hidden;
+    box-sizing: border-box;
+    padding: 0;
+    --pg-k: calc(100cqw / var(--pg-w));
+}
+.page-generator-canvas .pg-abs {
+    position: absolute;
+    left: calc(var(--pg-x, 0) * var(--pg-k));
+    top: calc(var(--pg-y, 0) * var(--pg-k));
+    width: calc(var(--pg-w, 0) * var(--pg-k));
+    height: calc(var(--pg-h, 0) * var(--pg-k));
+    max-width: none;
+    margin: 0 !important;
+    box-sizing: border-box;
+}
+.page-generator-canvas .pg-abs[style*="--pg-fs"] {
+    font-size: calc(var(--pg-fs) * var(--pg-k));
+}
+.page-generator-canvas .pg-abs.pg-text {
+    height: auto;
+    width: auto;
+    min-width: calc(var(--pg-w, 0) * var(--pg-k));
+    white-space: nowrap;
+    line-height: 1.2;
+}
+.page-generator-canvas .pg-abs.wp-block-group,
+.page-generator-canvas .pg-abs.wp-block-group.has-background {
+    padding: 0;
+}
+.page-generator-canvas .pg-abs.wp-block-buttons {
+    display: flex;
+}
+.page-generator-canvas .pg-abs.wp-block-buttons > .wp-block-button,
+.page-generator-canvas .pg-abs.wp-block-buttons .wp-block-button__link {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 .5em;
+    white-space: nowrap;
+}
+.page-generator-canvas .pg-abs.wp-block-image {
+    margin: 0;
+}
+.page-generator-canvas .pg-abs.wp-block-image img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+}
+.page-generator-canvas .pg-abs.wp-block-table table {
+    width: 100%;
+}
+.page-generator-canvas .pg-link a {
+    color: inherit;
+    text-decoration: none;
+}
+.page-generator-canvas .pg-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+}

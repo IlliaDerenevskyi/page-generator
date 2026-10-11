@@ -2,6 +2,58 @@
     'use strict';
     var analysisPromise = null;
 
+    function registerEditorBlocks() {
+        if (!PageGeneratorConfig.registerBlocks || !window.wp || !wp.blocks || !wp.element || !wp.blockEditor) return;
+        var createElement = wp.element.createElement;
+        var InnerBlocks = wp.blockEditor.InnerBlocks;
+        [
+            {
+                name: 'page-generator/component',
+                title: 'Page Generator component',
+                attributes: {
+                    node: { type: 'object' },
+                    dimensions: { type: 'object' },
+                    rootSection: { type: 'boolean', default: false }
+                }
+            },
+            {
+                name: 'page-generator/canvas',
+                title: 'Page Generator canvas',
+                attributes: {
+                    width: { type: 'number', default: 0 },
+                    height: { type: 'number', default: 0 }
+                }
+            }
+        ].forEach(function (block) {
+            if (wp.blocks.getBlockType(block.name)) return;
+            wp.blocks.registerBlockType(block.name, {
+                apiVersion: 2,
+                title: block.title,
+                category: 'design',
+                attributes: block.attributes,
+                supports: { html: false },
+                edit: function (props) {
+                    var node = props.attributes.node || {};
+                    var label = String(node.text || node.content || node.label || '');
+                    var type = node.type || (block.name === 'page-generator/canvas' ? 'canvas' : 'component');
+                    var children = [
+                        createElement('span', { className: 'page-generator-block-type', key: 'type' }, type)
+                    ];
+                    if (label) children.push(createElement('div', { className: 'page-generator-block-text', key: 'text' }, label));
+                    children.push(createElement(InnerBlocks, { key: 'inner' }));
+                    return createElement('div', {
+                        className: 'page-generator-block-editor-preview is-' + String(type).replace(/[^a-z0-9-]/gi, '')
+                    }, children);
+                },
+                save: function () {
+                    return createElement(InnerBlocks.Content, null);
+                }
+            });
+        });
+    }
+
+    registerEditorBlocks();
+
     function getNodeChildren(node) {
         if (node && Array.isArray(node.children) && node.children.length) return node.children;
         if (node && Array.isArray(node.elements)) return node.elements;
@@ -68,7 +120,7 @@
         boxes.forEach(function (box) {
             var last = groups[groups.length - 1];
             var lastBottom = last ? last.bottom : 0;
-            if (!last || box.y - lastBottom > Math.max(32, analysis.height * .045)) {
+            if (!last || box.y - lastBottom > Math.max(32, analysis.width * .058)) {
                 groups.push({ top: box.y, bottom: box.y + box.height });
             } else {
                 last.bottom = Math.max(last.bottom, box.y + box.height);
@@ -81,7 +133,7 @@
             var next = groups[index + 1] || null;
             var y = previous ? Math.round((previous.bottom + group.top) / 2) : 0;
             var bottom = next ? Math.round((group.bottom + next.top) / 2) : analysis.height;
-            if (bottom - y >= analysis.height * .04) {
+            if (bottom - y >= analysis.width * .04) {
                 bands.push({ y: y, height: bottom - y, background: analysis.colors && analysis.colors[0] || '#ffffff' });
             }
         });
@@ -118,7 +170,7 @@
                             '<label class="page-generator-field">Термін token (днів)<input id="pg-settings-token-days" type="number" min="1" max="3650" value="' + (PageGeneratorConfig.tokenTotalDays || 90) + '"></label>' +
                             '<label class="page-generator-field">Ширина контейнера (px)<input id="pg-settings-width" type="number" min="320" max="2400" value="' + (PageGeneratorConfig.containerWidth || 1200) + '"></label>' +
                         '</div>' +
-                        '<label class="page-generator-field">Мови OCR<input id="pg-settings-ocr" type="text" value="' + (PageGeneratorConfig.ocrLanguages || 'ukr+eng') + '"></label>' +
+                        '<label class="page-generator-field">Мови OCR<input id="pg-settings-ocr" type="text"></label>' +
                         '<button type="button" id="pg-save-settings" class="page-generator-button page-generator-button-primary">Зберегти швидкі налаштування</button>' +
                     '</div>' +
                     '<div id="pg-output-actions" style="display:none;margin-top:12px"><button type="button" id="pg-create-page" class="page-generator-button page-generator-button-primary">Оновити поточну WordPress Page</button> <button type="button" id="pg-insert-elementor" class="page-generator-button">Вставити в Elementor</button></div>' +
@@ -128,6 +180,13 @@
                 '</div>' +
             '</div>'
         );
+        $('#pg-settings-ocr').val(PageGeneratorConfig.ocrLanguages || 'ukr+eng');
+        if (!PageGeneratorConfig.canManageSettings) {
+            $('.page-generator-tab[data-view="settings"], .page-generator-view[data-view="settings"]').remove();
+        }
+        if (!PageGeneratorConfig.canUploadFiles) {
+            $('.page-generator-tab[data-view="screenshots"], .page-generator-view[data-view="screenshots"]').remove();
+        }
         bindModal();
         if (PageGeneratorConfig.tokenConfigured) {
             $('#pg-token-status').text('Token уже збережений; нове поле змінить його. Дійсний до ' + PageGeneratorConfig.tokenExpiresAt + '.');
@@ -198,6 +257,11 @@
                 return;
             }
             $('#pg-settings-token').val('');
+            PageGeneratorConfig.tokenConfigured = response.data.tokenConfigured;
+            PageGeneratorConfig.tokenExpiresAt = response.data.tokenExpiresAt;
+            PageGeneratorConfig.tokenTotalDays = response.data.tokenTotalDays;
+            PageGeneratorConfig.ocrLanguages = response.data.ocrLanguages;
+            PageGeneratorConfig.containerWidth = response.data.containerWidth;
             $('#pg-status').text(response.data.tokenConfigured
                 ? 'Налаштування збережено. Token дійсний до ' + response.data.tokenExpiresAt + '.'
                 : 'Налаштування збережено без Figma token.');
@@ -410,8 +474,41 @@
             $('#pg-status').text('Активний контейнер Elementor не знайдено.');
             return;
         }
-        var elements = schema.sections.map(toElementorModel);
-        Promise.all(elements.map(function (model) {
+        var groups = [];
+        schema.sections.forEach(function (section) {
+            var groupId = section.sourceGroup || 'default';
+            var group = groups[groups.length - 1];
+            if (!group || group.id !== groupId) {
+                group = { id: groupId, sections: [] };
+                groups.push(group);
+            }
+            group.sections.push(section);
+        });
+        var models = groups.map(function (group) {
+            var section = group.sections[0] || {};
+            var width = Number(section.settings && section.settings.sourceWidth || 0);
+            var height = Number(section.settings && section.settings.sourceHeight || 0);
+            var containerWidth = Number($('#page-generator-modal').data('schema').containerWidth || 1200);
+            var displayWidth = width ? Math.min(width, containerWidth) : 0;
+            var parentBox = { x: 0, y: 0, width: width, height: height };
+            var settings = {
+                css_classes: 'page-generator-canvas',
+                flex_direction: 'column',
+                content_width: width ? 'boxed' : 'full'
+            };
+            if (displayWidth) settings.boxed_width = { unit: 'px', size: displayWidth };
+            if (displayWidth && height) settings.min_height = { unit: 'px', size: Math.round(height * displayWidth / width) };
+            return {
+                id: randomId(),
+                elType: 'container',
+                isInner: false,
+                settings: settings,
+                elements: group.sections.map(function (node) {
+                    return toElementorModel(node, parentBox);
+                })
+            };
+        });
+        Promise.all(models.map(function (model) {
             return window.$e.run('document/elements/create', { container: root, model: model });
         })).then(function () {
             $('#pg-status').text('Схему вставлено в Elementor.');
@@ -420,7 +517,7 @@
         });
     }
 
-    function toElementorModel(node) {
+    function toElementorModel(node, parentBox) {
         var children = getNodeChildren(node);
         var settings = node.settings || {};
         var style = node.style || {};
@@ -438,22 +535,22 @@
                     size: Math.max(10, Number(style.fontSize || settings.fontSize || 16))
                 };
             }
-            return { id: randomId(), elType: 'widget', widgetType: 'heading', settings: headingSettings, elements: [] };
+            return positionElementorModel({ id: randomId(), elType: 'widget', widgetType: 'heading', settings: headingSettings, elements: [] }, node, parentBox);
         }
         if (node.type === 'text') {
             var textSettings = { editor: node.content || node.text || '' };
             if (hasTextColor) textSettings.text_color = textColor;
-            return { id: randomId(), elType: 'widget', widgetType: 'text-editor', settings: textSettings, elements: [] };
+            return positionElementorModel({ id: randomId(), elType: 'widget', widgetType: 'text-editor', settings: textSettings, elements: [] }, node, parentBox);
         }
         if (node.type === 'image') {
             var imageAsset = node.asset || {};
-            return {
+            return positionElementorModel({
                 id: randomId(),
                 elType: 'widget',
                 widgetType: 'image',
                 settings: { image: { url: node.url || imageAsset.url || '', id: node.attachmentId || imageAsset.id || '' } },
                 elements: []
-            };
+            }, node, parentBox);
         }
         if (node.type === 'button') {
             var buttonSettings = {
@@ -462,67 +559,100 @@
             };
             if (hasTextColor) buttonSettings.button_text_color = textColor;
             if (hasBackgroundColor) buttonSettings.background_color = backgroundColor;
-            return {
+            return positionElementorModel({
                 id: randomId(),
                 elType: 'widget',
                 widgetType: 'button',
                 settings: buttonSettings,
                 elements: []
-            };
+            }, node, parentBox);
         }
         if (node.type === 'link' || node.type === 'logo') {
-            return {
+            return positionElementorModel({
                 id: randomId(),
                 elType: 'widget',
                 widgetType: 'heading',
                 settings: { title: node.text || node.content || '' },
                 elements: []
-            };
+            }, node, parentBox);
         }
         if (node.type === 'form-field') {
-            return {
+            var fieldType = ['email', 'phone', 'date', 'text', 'select', 'textarea', 'checkbox'].indexOf(node.fieldType) !== -1
+                ? node.fieldType : 'text';
+            var fieldLabel = escapeElementorText(node.label || 'Поле');
+            return positionElementorModel({
                 id: randomId(),
                 elType: 'widget',
                 widgetType: 'html',
                 settings: {
-                    html: '<label class="page-generator-form-field"><span>' +
-                        String(node.label || 'Поле').replace(/[<>&"]/g, '') +
-                        '</span><input type="' + (node.fieldType === 'phone' ? 'tel' : (node.fieldType || 'text')) +
-                        '" placeholder="' + String(node.label || '').replace(/[<>&"]/g, '') + '"></label>'
+                    html: '<label class="page-generator-form-field"><span>' + fieldLabel +
+                        '</span><input type="' + (fieldType === 'phone' ? 'tel' : escapeElementorText(fieldType)) +
+                        '" placeholder="' + fieldLabel + '"></label>'
                 },
                 elements: []
-            };
+            }, node, parentBox);
         }
         if (node.type === 'form' || node.type === 'table') {
-            return {
+            return positionElementorModel({
                 id: randomId(),
                 elType: 'widget',
                 widgetType: 'html',
                 settings: { html: localComplexNodeHtml(node) },
                 elements: []
-            };
+            }, node, parentBox);
         }
         if (node.type === 'badge') {
-            return {
+            return positionElementorModel({
                 id: randomId(),
                 elType: 'widget',
                 widgetType: 'text-editor',
                 settings: { editor: '<span class="page-generator-badge">' + escapeElementorText(node.text || node.content || '') + '</span>' },
                 elements: []
-            };
+            }, node, parentBox);
         }
-        return {
+        var containerSettings = {
+            flex_direction: settings.direction === 'row' ? 'row' : 'column',
+            content_width: node.inner ? 'boxed' : 'full',
+            boxed_width: { unit: 'px', size: $('#page-generator-modal').data('schema').containerWidth || 1200 },
+            gap: { unit: 'px', size: Number(settings.gap || 0) }
+        };
+        if (hasBackgroundColor) {
+            containerSettings.background_background = 'classic';
+            containerSettings.background_color = backgroundColor;
+        }
+        return positionElementorModel({
             id: randomId(),
             elType: 'container',
             isInner: !!node.inner,
-            settings: {
-                flex_direction: settings.direction === 'row' ? 'row' : 'column',
-                content_width: node.inner ? 'boxed' : 'full',
-                boxed_width: { unit: 'px', size: $('#page-generator-modal').data('schema').containerWidth || 1200 },
-                gap: { unit: 'px', size: Number(settings.gap || 0) }
-            },
-            elements: children.map(toElementorModel)
+            settings: containerSettings,
+            elements: children.map(function (child) {
+                return toElementorModel(child, node.bbox || parentBox);
+            })
+        }, node, parentBox);
+    }
+
+    function positionElementorModel(model, node, parentBox) {
+        var box = node.bbox;
+        if (!box || !parentBox || !parentBox.width || !parentBox.height) return model;
+        var isContainer = model.elType === 'container';
+        var prefix = isContainer ? '' : '_';
+        model.settings[prefix + 'position'] = 'absolute';
+        model.settings[prefix + 'offset_x'] = {
+            unit: 'px',
+            size: Number(box.x || 0) - Number(parentBox.x || 0),
+            sizes: []
         };
+        model.settings[prefix + 'offset_y'] = {
+            unit: 'px',
+            size: Number(box.y || 0) - Number(parentBox.y || 0),
+            sizes: []
+        };
+        model.settings[prefix + 'width'] = {
+            unit: 'px',
+            size: Math.max(1, Number(box.width || 0)),
+            sizes: []
+        };
+        return model;
     }
 
     function escapeElementorText(value) {
@@ -542,7 +672,9 @@
         }
         var fields = getNodeChildren(node).map(function (field) {
             var label = escapeElementorText(field.label || field.text || 'Поле');
-            var type = field.fieldType === 'phone' ? 'tel' : (field.fieldType || 'text');
+            var fieldType = ['email', 'phone', 'date', 'text', 'select', 'textarea', 'checkbox'].indexOf(field.fieldType) !== -1
+                ? field.fieldType : 'text';
+            var type = fieldType === 'phone' ? 'tel' : fieldType;
             return '<label><span>' + label + '</span><input type="' + escapeElementorText(type) + '" placeholder="' + label + '"></label>';
         }).join('');
         return '<form class="page-generator-form">' + fields + '<button type="submit">Надіслати</button></form>';
@@ -562,6 +694,7 @@
         });
         if (!files.length) return;
         var completed = 0;
+        var failed = 0;
         var uploaded = [];
         $('#pg-status').text('Завантаження assets: 0/' + files.length);
         files.forEach(function (file) {
@@ -570,13 +703,20 @@
             form.append('nonce', PageGeneratorConfig.nonce);
             form.append('asset', file, file.name);
             $.ajax({ url: PageGeneratorConfig.ajaxUrl, method: 'POST', data: form, processData: false, contentType: false })
-                .done(function (response) { if (response.success) uploaded.push({ file: file, data: response.data }); })
+                .done(function (response) {
+                    if (response.success) uploaded.push({ file: file, data: response.data });
+                    else failed += 1;
+                })
+                .fail(function () { failed += 1; })
                 .always(function () {
                     completed += 1;
                     $('#pg-status').text('Завантаження assets: ' + completed + '/' + files.length);
                     if (completed === files.length) {
                         $('#page-generator-modal').data('uploaded-images', uploaded);
                         $('#pg-build-screenshot').prop('disabled', uploaded.length === 0);
+                        if (failed) {
+                            $('#pg-status').text('Завантажено ' + uploaded.length + ' з ' + files.length + ' файлів; не вдалося завантажити ' + failed + '. Перевірте тип, розмір файлів і права на медіафайли.');
+                        }
                     }
                 });
         });
@@ -622,10 +762,23 @@
                     canvas.height = image.naturalHeight;
                     var context = canvas.getContext('2d', { willReadFrequently: true });
                     context.drawImage(image, 0, 0);
+                    var surfaces = [];
+                    if (window.PageGeneratorDetectors) {
+                        var pixelData = context.getImageData(0, 0, canvas.width, canvas.height).data;
+                        surfaces = window.PageGeneratorDetectors.classifySurfaces(
+                            window.PageGeneratorDetectors.detectSurfaces(pixelData, canvas.width, canvas.height),
+                            canvas.width, pixelData, canvas.height
+                        );
+                    }
                     Promise.all([
                         recognizeScreenshot(canvas),
                         detectScreenshotRegions(canvas)
                     ]).then(function (results) {
+                        return recognizePlates(canvas, surfaces, results[0]).then(function (extraWords) {
+                            results[0] = results[0].concat(extraWords);
+                            return results;
+                        });
+                    }).then(function (results) {
                         return uploadDetectedCrops(canvas, results[1].boxes).then(function (assets) {
                             results[1].boxes.forEach(function (box, index) { if (assets[index]) box.asset = assets[index]; });
                             resolve({
@@ -635,6 +788,8 @@
                             height: canvas.height,
                             words: results[0],
                             boxes: results[1].boxes,
+                            surfaces: surfaces,
+                            sections: results[1].sections,
                             colors: results[1].colors,
                             canvas: canvas
                             });
@@ -655,7 +810,7 @@
         }).slice(0, 12);
         if (!candidates.length) return Promise.resolve({});
         return Promise.all(candidates.map(function (item) {
-            return new Promise(function (resolve) {
+            return new Promise(function (resolve, reject) {
                 var crop = document.createElement('canvas');
                 crop.width = item.box.width;
                 crop.height = item.box.height;
@@ -667,8 +822,14 @@
                     form.append('nonce', PageGeneratorConfig.nonce);
                     form.append('asset', blob, 'detected-region-' + item.index + '.png');
                     $.ajax({ url: PageGeneratorConfig.ajaxUrl, method: 'POST', data: form, processData: false, contentType: false })
-                        .done(function (response) { resolve(response.success ? response.data : null); })
-                        .fail(function () { resolve(null); });
+                        .done(function (response) {
+                            if (!response.success) {
+                                reject(new Error(response.data || 'Сервер відхилив завантаження виявленого зображення.'));
+                                return;
+                            }
+                            resolve(response.data);
+                        })
+                        .fail(function () { reject(new Error('Не вдалося завантажити виявлене зображення.')); });
                 }, 'image/png');
             });
         })).then(function (results) {
@@ -707,6 +868,80 @@
             });
     }
 
+    // Light text on a coloured plate (buttons, badges) is missed by the page-wide OCR pass, so each plate is read on its own,
+    // recoloured to dark-on-white by its distance from the plate fill.
+    // Extent of the glyphs on a plate: pixels clearly different from the fill, away from rounded corners.
+    function findInkBox(canvas, plate) {
+        var margin = Math.max(3, Math.round(Math.min(plate.width, plate.height) * .12));
+        var width = plate.width - margin * 2;
+        var height = plate.height - margin * 2;
+        if (width < 4 || height < 4) return null;
+        var data = canvas.getContext('2d', { willReadFrequently: true }).getImageData(plate.x + margin, plate.y + margin, width, height).data;
+        var minX = width, maxX = -1, minY = height, maxY = -1;
+        for (var y = 0; y < height; y += 1) {
+            for (var x = 0; x < width; x += 1) {
+                var offset = (y * width + x) * 4;
+                if (Math.abs(data[offset] - plate.fill[0]) + Math.abs(data[offset + 1] - plate.fill[1]) + Math.abs(data[offset + 2] - plate.fill[2]) > 90) {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+        if (maxX < 0) return null;
+        return { x: plate.x + margin + minX, y: plate.y + margin + minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+    }
+
+    function recognizePlates(canvas, surfaces, words) {
+        var plates = (surfaces || []).filter(function (surface) {
+            if (surface.kind !== 'button' && surface.kind !== 'badge') return false;
+            return !words.some(function (word) {
+                return word.x >= surface.x - 2 && word.y >= surface.y - 2 &&
+                    word.x + word.width <= surface.x + surface.width + 2 && word.y + word.height <= surface.y + surface.height + 2;
+            });
+        }).slice(0, 40);
+        if (!plates.length) return Promise.resolve([]);
+        return Tesseract.createWorker(PageGeneratorConfig.ocrLanguages || 'ukr+eng').then(function (worker) {
+            var found = [];
+            var chain = worker.setParameters({ tessedit_pageseg_mode: '7' });
+            plates.forEach(function (plate) {
+                chain = chain.then(function () {
+                    var scale = Math.min(4, Math.max(2, Math.ceil(70 / plate.height)));
+                    var crop = document.createElement('canvas');
+                    crop.width = Math.round(plate.width * scale);
+                    crop.height = Math.round(plate.height * scale);
+                    var context = crop.getContext('2d', { willReadFrequently: true });
+                    context.drawImage(canvas, plate.x, plate.y, plate.width, plate.height, 0, 0, crop.width, crop.height);
+                    var image = context.getImageData(0, 0, crop.width, crop.height);
+                    for (var index = 0; index < image.data.length; index += 4) {
+                        var distance = Math.abs(image.data[index] - plate.fill[0]) + Math.abs(image.data[index + 1] - plate.fill[1]) + Math.abs(image.data[index + 2] - plate.fill[2]);
+                        var value = 255 - Math.min(255, distance * 1.2);
+                        image.data[index] = value; image.data[index + 1] = value; image.data[index + 2] = value;
+                    }
+                    context.putImageData(image, 0, 0);
+                    return worker.recognize(crop).then(function (result) {
+                        var ink = findInkBox(canvas, plate);
+                        if (!ink) return;
+                        var read = (result.data.words || []).filter(function (word) {
+                            if (!word.text || word.confidence < 30) return false;
+                            var cx = plate.x + (word.bbox.x0 + word.bbox.x1) / 2 / scale;
+                            var cy = plate.y + (word.bbox.y0 + word.bbox.y1) / 2 / scale;
+                            return cx >= ink.x - 4 && cx <= ink.x + ink.width + 4 && cy >= ink.y - 4 && cy <= ink.y + ink.height + 4;
+                        });
+                        if (!read.length) return;
+                        found.push({
+                            text: read.map(function (word) { return word.text.trim(); }).join(' '),
+                            x: ink.x, y: ink.y, width: ink.width, height: ink.height,
+                            confidence: read.reduce(function (sum, word) { return sum + word.confidence; }, 0) / read.length
+                        });
+                    });
+                });
+            });
+            return chain.then(function () { return worker.terminate(); }).then(function () { return found; });
+        });
+    }
+
     function detectScreenshotRegions(canvas) {
         return new Promise(function (resolve) {
             var source = cv.imread(canvas);
@@ -733,8 +968,8 @@
                     });
                 }
             }
-            boxes = normalizeRegions(boxes, canvas);
             var pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+            boxes = normalizeRegions(boxes, canvas, pixels);
             var colorCounts = {};
             for (var pixel = 0; pixel < pixels.length; pixel += 16) {
                 var red = Math.min(255, Math.round(pixels[pixel] / 32) * 32);
@@ -748,15 +983,15 @@
             source.delete(); gray.delete(); edges.delete(); contours.delete(); hierarchy.delete(); kernel.delete();
             resolve({
                 boxes: boxes,
-                sections: detectSectionBands(canvas),
+                sections: window.PageGeneratorDetectors ? window.PageGeneratorDetectors.detectBands(pixels, canvas.width, canvas.height) : detectSectionBands(canvas),
                 colors: Object.keys(colorCounts).sort(function (a, b) { return colorCounts[b] - colorCounts[a]; }).slice(0, 12)
             });
         });
     }
 
-    function normalizeRegions(boxes, canvas) {
+    function normalizeRegions(boxes, canvas, pixelData) {
         var filtered = boxes.filter(function (box) {
-            return box.width * box.height >= canvas.width * canvas.height * .002 &&
+            return box.width * box.height >= canvas.width * canvas.width * .002 &&
                 box.width <= canvas.width * .92 &&
                 box.height <= canvas.height * .92;
         });
@@ -766,8 +1001,11 @@
             .sort(function (a, b) { return (b.width * b.height) - (a.width * a.height); })
             .slice(0, 120)
             .map(function (box) {
-                box.kind = box.variance > 35 ? 'photo-candidate' : 'surface-candidate';
-                box.textLike = box.width < canvas.width * .55 && box.height < canvas.height * .18 && box.variance < 45;
+                var photographic = pixelData && window.PageGeneratorDetectors
+                    ? window.PageGeneratorDetectors.isPhotographic(pixelData, canvas.width, box)
+                    : box.variance > 35;
+                box.kind = photographic ? 'photo-candidate' : 'surface-candidate';
+                box.textLike = box.width < canvas.width * .55 && box.height < canvas.width * .18 && box.variance < 45;
                 box.rounded = estimateRoundedCorners(canvas, box);
                 box.gradient = estimateGradient(canvas, box);
                 return box;
@@ -972,14 +1210,17 @@
         var hints = parseDescription(description || '');
         var sections = [];
         analyses.forEach(function (analysis) {
+            analysis.sourceGroup = randomId();
             var groups = groupWordsIntoLines(analysis.words);
+            var lineHeights = groups.map(function (line) { return line.height; }).sort(function (a, b) { return a - b; });
+            analysis.medianLine = lineHeights.length ? lineHeights[Math.floor(lineHeights.length / 2)] : 16;
             var textElements = groups.map(function (line) {
                 var text = normalizeOcrText(line.words.map(function (word) { return word.text; }).join(' '));
                 if (!isUsableOcrText(text, line.words)) return null;
                 var node = {
                     id: randomId(),
-                    type: line.height >= Math.max(18, analysis.height * .025) ? 'heading' : 'text',
-                    role: line.height >= Math.max(18, analysis.height * .025) ? 'heading' : 'paragraph',
+                    type: line.height >= analysis.medianLine * 1.45 ? 'heading' : 'text',
+                    role: line.height >= analysis.medianLine * 1.45 ? 'heading' : 'paragraph',
                     content: text,
                     text: text,
                     bbox: { x: line.x, y: line.y, width: line.width, height: line.height },
@@ -997,6 +1238,7 @@
                 node = classifyTextNode(node, analysis);
                 return node;
             }).filter(function (node) { return node !== null; });
+            markMenuRuns(textElements, analysis);
             var semantic = analyzeLayout(analysis, textElements);
             semantic.elements = buildRecursiveTree(semantic.elements, analysis);
             splitIntoSections(analysis, semantic, analysis.data, textElements).forEach(function (section) {
@@ -1015,6 +1257,65 @@
         };
     }
 
+    function markMenuRuns(textElements, analysis) {
+        if (!window.PageGeneratorDetectors) return;
+        var bands = analysis.sections || [];
+        var nearEdge = function (box) {
+            if (bands.length < 3) return box.y < analysis.width * .5 || box.y > analysis.height - analysis.width * .5;
+            var center = box.y + box.height / 2;
+            var index = bands.findIndex(function (band) { return center >= band.y && center < band.y + band.height; });
+            return index === 0 || (index >= bands.length - 2 && index > 0 && isDarkBackground(bands[index].background));
+        };
+        var candidates = textElements.filter(function (node) {
+            var box = node.bbox || {};
+            var insideControl = (analysis.surfaces || []).some(function (surface) {
+                return (surface.kind === 'button' || surface.kind === 'input' || surface.kind === 'badge') &&
+                    box.x >= surface.x && box.y >= surface.y && box.x + box.width <= surface.x + surface.width && box.y + box.height <= surface.y + surface.height;
+            });
+            return node.type !== 'button' && !insideControl && nearEdge(box);
+        });
+        window.PageGeneratorDetectors.detectLineRuns(candidates.map(function (node) {
+            return { x: node.bbox.x, y: node.bbox.y, width: node.bbox.width, height: node.bbox.height, node: node };
+        })).forEach(function (run) {
+            var sizes = run.items.map(function (item) { return Number(item.node.style && item.node.style.fontSize || 0); })
+                .filter(Boolean).sort(function (a, b) { return a - b; });
+            var runSize = sizes.length ? sizes[Math.floor(sizes.length / 2)] : 0;
+            run.items.forEach(function (item) {
+                if (runSize) {
+                    item.node.style.fontSize = runSize;
+                    item.node.settings.fontSize = runSize;
+                }
+                item.node.type = 'link';
+                item.node.role = 'navigation-item';
+                item.node.behavior = { type: 'unknown' };
+                item.node.confidence = Math.max(item.node.confidence || 0, .7);
+                item.node.detection = { detectedBy: ['ocr', 'line-run'], manual: false, axis: run.axis };
+            });
+        });
+    }
+
+    // Background of a text box = most common colour in a thin ring just outside it (inside, glyphs touch the edges).
+    function ringBackground(canvas, box) {
+        var context = canvas.getContext('2d', { willReadFrequently: true });
+        var gap = 4;
+        var x0 = Math.max(0, Math.floor(box.x) - gap);
+        var y0 = Math.max(0, Math.floor(box.y) - gap);
+        var x1 = Math.min(canvas.width - 1, Math.ceil(box.x + box.width) + gap);
+        var y1 = Math.min(canvas.height - 1, Math.ceil(box.y + box.height) + gap);
+        var counts = {};
+        var take = function (x, y) {
+            var pixel = context.getImageData(x, y, 1, 1).data;
+            var key = (pixel[0] >> 2) + ',' + (pixel[1] >> 2) + ',' + (pixel[2] >> 2);
+            counts[key] = counts[key] || { n: 0, color: [pixel[0], pixel[1], pixel[2]] };
+            counts[key].n += 1;
+        };
+        var step = Math.max(1, Math.floor((x1 - x0) / 40));
+        for (var x = x0; x <= x1; x += step) { take(x, y0); take(x, y1); }
+        for (var y = y0; y <= y1; y += Math.max(1, Math.floor((y1 - y0) / 12))) { take(x0, y); take(x1, y); }
+        var best = Object.keys(counts).sort(function (a, b) { return counts[b].n - counts[a].n; })[0];
+        return best ? counts[best].color : [255, 255, 255];
+    }
+
     function sampleTextColor(canvas, box, fallback) {
         if (!canvas || !box) return fallback;
         var x = Math.max(0, Math.floor(box.x || 0));
@@ -1023,24 +1324,28 @@
         var height = Math.min(canvas.height - y, Math.max(1, Math.ceil(box.height || 1)));
         if (width <= 0 || height <= 0) return fallback;
         var pixels = canvas.getContext('2d', { willReadFrequently: true }).getImageData(x, y, width, height).data;
-        var background = hexToRgb(sampleRegionBackground(canvas, box));
-        var counts = {};
+        var background = ringBackground(canvas, box);
+        var ink = [];
         for (var index = 0; index < pixels.length; index += 4) {
-            var red = pixels[index];
-            var green = pixels[index + 1];
-            var blue = pixels[index + 2];
-            if (colorDistance([red, green, blue], background) < 24) continue;
-            var color = '#' + [red, green, blue].map(function (value) {
-                return Math.min(255, Math.round(value / 8) * 8).toString(16).padStart(2, '0');
-            }).join('');
-            counts[color] = (counts[color] || 0) + 1;
+            var distance = colorDistance([pixels[index], pixels[index + 1], pixels[index + 2]], background);
+            if (distance >= 24) ink.push({ distance: distance, color: [pixels[index], pixels[index + 1], pixels[index + 2]] });
         }
-        var candidates = Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; });
-        return candidates.length ? normalizeHexColor(candidates[0]) : fallback;
+        if (!ink.length) return fallback;
+        ink.sort(function (a, b) { return b.distance - a.distance; });
+        var core = ink.slice(0, Math.max(1, Math.ceil(ink.length * .15)));
+        var sum = core.reduce(function (total, item) {
+            return [total[0] + item.color[0], total[1] + item.color[1], total[2] + item.color[2]];
+        }, [0, 0, 0]);
+        var inkColor = sum.map(function (value) { return Math.round(value / core.length); });
+        if (colorDistance(inkColor, background) < 60) {
+            var lightBackground = background[0] * .299 + background[1] * .587 + background[2] * .114 > 140;
+            return lightBackground ? '#1f2937' : '#f8fafc';
+        }
+        return normalizeHexColor(rgbToHex(inkColor), fallback);
     }
 
     function splitIntoSections(analysis, semantic, uploadedData, textElements) {
-        var bands = (analysis.sections || []).filter(function (band) { return band.height >= analysis.height * .04; });
+        var bands = (analysis.sections || []).filter(function (band) { return band.height >= analysis.width * .02; });
         if (bands.length < 2) bands = deriveContentBands(semantic.elements, analysis);
         if (bands.length < 2) bands = [{ y: 0, height: analysis.height, background: semantic.background }];
         var sections = bands.map(function (band, index) {
@@ -1059,6 +1364,7 @@
             children = classifyStructuredContent(children, scopedText, analysis, type, band);
             return {
                 id: randomId(),
+                sourceGroup: analysis.sourceGroup,
                 type: type,
                 inner: false,
                 settings: { direction: 'column', gap: 16, sourceWidth: analysis.width, sourceHeight: analysis.height },
@@ -1076,10 +1382,17 @@
                 detection: { detectedBy: ['opencv', 'ocr', 'color-analysis', 'section-bands'], manual: false }
             };
         }).filter(function (section) { return section.children.length || section.type === 'footer'; });
+        if (sections.length) {
+            sections[0].source = {
+                url: uploadedData.url,
+                attachmentId: uploadedData.id,
+                fileName: uploadedData.fileName || (analysis.file ? analysis.file.name : '')
+            };
+        }
         return sections.length ? sections : [{
-            id: randomId(), type: semantic.type, inner: false,
+            id: randomId(), sourceGroup: analysis.sourceGroup, type: semantic.type, inner: false,
             settings: { direction: 'column', gap: 16, sourceWidth: analysis.width, sourceHeight: analysis.height },
-            source: { url: uploadedData.url, attachmentId: uploadedData.id, fileName: uploadedData.file ? uploadedData.file.name : '' },
+            source: { url: uploadedData.url, attachmentId: uploadedData.id, fileName: uploadedData.fileName || (analysis.file ? analysis.file.name : '') },
             detectedRegions: analysis.boxes, elements: semantic.elements, children: semantic.elements,
             layout: semantic.layout, background: semantic.background, bands: analysis.sections || [],
             bbox: { x: 0, y: 0, width: analysis.width, height: analysis.height },
@@ -1088,12 +1401,17 @@
         }];
     }
 
+    function isDarkBackground(color) {
+        var rgb = hexToRgb(color);
+        return rgb[0] * .299 + rgb[1] * .587 + rgb[2] * .114 < 90;
+    }
+
     function classifyBand(band, children, analysis, index, total) {
         var text = children.map(function (node) { return node.text || node.content || ''; }).join(' ').toLowerCase();
         if (index === 0 && children.length >= 2) return 'header';
-        if (index === total - 1 && (text.indexOf('copyright') !== -1 || text.indexOf('контакт') !== -1 || band.height < analysis.height * .18)) return 'footer';
+        if (index >= total - 2 && total >= 3 && isDarkBackground(band.background)) return 'footer';
+        if (inputSurfaces(analysis, band).length >= 2) return 'form-section';
         if (/таблиц|дата і час|рівень шум|статус/.test(text)) return 'table-section';
-        if (/замовити|ім.?я|email|адрес|телефон/.test(text)) return 'form-section';
         if (/увага|alert|перевищ/.test(text)) return 'alert-section';
         return 'section';
     }
@@ -1193,9 +1511,7 @@
         (analysis.boxes || []).forEach(function (box, index) {
             if (representedBoxes.indexOf(index) !== -1) return;
             var regionText = textByRegion[index] || [];
-            var isVisual = box.kind === 'photo-candidate' ||
-                (box.rounded >= 2 && box.width >= 70 && box.height >= 28) ||
-                (box.textLike && box.width >= 90);
+            var isVisual = box.kind === 'photo-candidate';
             if (!isVisual) return;
             var visualType = box.kind === 'photo-candidate' && box.asset ? 'image' : 'card';
             var visualChildren = regionText.slice();
@@ -1225,12 +1541,27 @@
                 }
             });
         });
+        addSurfaceCards(analysis, textElements, elements, usedText);
         textElements.forEach(function (item) {
             if (!usedText[item.id]) elements.push(item);
         });
         (analysis.boxes || []).filter(function (box) {
-            return box.width <= analysis.width * .12 && box.height <= analysis.height * .12 &&
+            return box.width <= analysis.width * .12 && box.height <= analysis.width * .12 &&
                 box.width >= 10 && box.height >= 10 && !textByRegion[analysis.boxes.indexOf(box)].length;
+        }).filter(function (box) {
+            var overlapsText = textElements.some(function (item) {
+                var textBox = nodeBox(item);
+                return centerInside(textBox, box) || centerInside(box, textBox);
+            });
+            var insideControl = (analysis.surfaces || []).some(function (surface) {
+                return ['button', 'badge', 'input'].indexOf(surface.kind) !== -1 && centerInside(box, surface);
+            });
+            return !overlapsText && !insideControl;
+        }).filter(function (box) {
+            return !(analysis.boxes || []).some(function (photo) {
+                return photo.kind === 'photo-candidate' && photo.width > 150 && photo.height > 150 &&
+                    centerInside(box, photo) && photo !== box;
+            });
         }).forEach(function (box) {
             elements.push({
                 id: randomId(),
@@ -1252,10 +1583,59 @@
         return { elements: classifiedElements, layout: 'semantic-component-tree', background: background, type: type, confidence: type === 'section' ? 0.48 : 0.7 };
     }
 
+    function boxOverlapRatio(first, second) {
+        var left = Math.max(first.x, second.x);
+        var top = Math.max(first.y, second.y);
+        var right = Math.min(first.x + first.width, second.x + second.width);
+        var bottom = Math.min(first.y + first.height, second.y + second.height);
+        if (right <= left || bottom <= top) return 0;
+        var shared = (right - left) * (bottom - top);
+        return shared / (first.width * first.height + second.width * second.height - shared);
+    }
+
+    // Cards come from flat-colour plates, so they do not depend on contour filters that drop near-full-width blocks.
+    function addSurfaceCards(analysis, textElements, elements, usedText) {
+        var cards = (analysis.surfaces || []).filter(function (surface) {
+            return surface.kind === 'card' && surface.width < analysis.width * .99;
+        });
+        var area = function (box) { return box.width * box.height; };
+        cards.slice().sort(function (a, b) { return area(b) - area(a); }).forEach(function (surface) {
+            var exists = elements.some(function (node) {
+                return ['card', 'image', 'grid', 'gallery'].indexOf(node.type) !== -1 && boxOverlapRatio(nodeBox(node), surface) > .7;
+            });
+            if (exists) return;
+            var content = textElements.filter(function (item) {
+                if (usedText[item.id]) return false;
+                var box = nodeBox(item);
+                if (!centerInside(box, surface)) return false;
+                var owner = cards.filter(function (card) { return centerInside(box, card); })
+                    .sort(function (a, b) { return area(a) - area(b); })[0];
+                return owner === surface;
+            });
+            if (!content.length) return;
+            content.forEach(function (item) { usedText[item.id] = true; });
+            elements.push({
+                id: randomId(),
+                type: 'card',
+                role: 'content-card',
+                text: '',
+                content: '',
+                bbox: { x: surface.x, y: surface.y, width: surface.width, height: surface.height },
+                settings: { x: surface.x, y: surface.y, width: surface.width, height: surface.height },
+                style: { background: surface.background, borderRadius: surface.rounded || 0 },
+                children: content,
+                elements: content,
+                behavior: { type: 'none' },
+                confidence: .7,
+                detection: { detectedBy: ['surface-geometry', 'spatial-ownership'], manual: false }
+            });
+        });
+    }
+
     function isUsableRegionRow(row, analysis) {
         if (!row || row.length < 2) return false;
         var maxWidth = analysis.width * .45;
-        var maxHeight = analysis.height * .35;
+        var maxHeight = analysis.width * .35;
         var usable = row.filter(function (box) {
             return box.width >= 45 && box.height >= 28 &&
                 box.width <= maxWidth && box.height <= maxHeight &&
@@ -1273,15 +1653,12 @@
         var textNodeCount = elements.filter(function (node) {
             return Boolean((node.text || node.content || '').trim());
         }).length;
+        if (formFields.length >= 2 && sectionType === 'form-section') {
+            var withForm = buildFormInElements(elements, formFields);
+            if (withForm) return withForm;
+        }
         if (tableEvidence.isTable && !hasVisualComponents && textNodeCount >= 3) {
             return [makeTableNode(elements, .76)];
-        }
-        if (formFields.length >= 2 && !hasVisualComponents && sectionType === 'form-section') {
-            var formBox = groupBoundingBox(formFields.map(function (field) { return field.bbox; }));
-            var scopeArea = scope ? Number(scope.width || 0) * Number(scope.height || 0) : 0;
-            if (!scopeArea || formBox.width * formBox.height <= scopeArea * .85) {
-                return [makeFormNode(elements, .72, formFields)];
-            }
         }
         return elements.map(function (node) {
             if (node.type === 'grid') {
@@ -1300,19 +1677,9 @@
         var ordered = children.slice().sort(function (a, b) {
             return (a.bbox && a.bbox.y || a.settings && a.settings.y || 0) - (b.bbox && b.bbox.y || b.settings && b.settings.y || 0);
         });
-        return ordered.map(function (child, index) {
-            var text = (child.text || child.content || '').trim();
-            if (/^(норма|працюють|нова|перевищення|alert)$/i.test(text) || /перевищ/.test(text.toLowerCase())) {
-                child.type = 'badge';
-                child.role = 'status-badge';
-                child.confidence = Math.max(child.confidence || 0, .78);
-            } else if (index === 0 && text.length < 60) {
-                child.type = 'heading';
-                child.role = 'card-heading';
-            } else {
-                child.type = 'text';
-                child.role = 'card-paragraph';
-            }
+        return ordered.map(function (child) {
+            if (['button', 'badge', 'link', 'image', 'icon', 'form', 'form-field', 'card', 'table'].indexOf(child.type) !== -1) return child;
+            child.role = child.type === 'heading' ? 'card-heading' : 'card-paragraph';
             return child;
         });
     }
@@ -1335,27 +1702,89 @@
         return node;
     }
 
+    function nodeBox(node) {
+        return node.bbox || node.settings || { x: 0, y: 0, width: 0, height: 0 };
+    }
+
+    function centerInside(box, outer) {
+        var cx = box.x + box.width / 2;
+        var cy = box.y + box.height / 2;
+        return cx >= outer.x && cx <= outer.x + outer.width && cy >= outer.y && cy <= outer.y + outer.height;
+    }
+
+    function collectByType(nodes, type, found) {
+        (nodes || []).forEach(function (node) {
+            if (node.type === type) found.push(node);
+            collectByType(getNodeChildren(node), type, found);
+        });
+        return found;
+    }
+
+    // The form replaces only what lies inside its own box; headings and descriptions around it are kept.
+    function buildFormInElements(elements, fields) {
+        var fieldsBox = groupBoundingBox(fields.map(function (field) { return field.bbox; }));
+        var wrapper = null;
+        elements.forEach(function (node) {
+            var box = nodeBox(node);
+            var contains = box.x <= fieldsBox.x + 2 && box.y <= fieldsBox.y + 2 &&
+                box.x + box.width >= fieldsBox.x + fieldsBox.width - 2 && box.y + box.height >= fieldsBox.y + fieldsBox.height - 2;
+            if (contains && node.type === 'card' && (!wrapper || box.width * box.height < nodeBox(wrapper).width * nodeBox(wrapper).height)) wrapper = node;
+        });
+        var formBox = wrapper ? Object.assign({}, nodeBox(wrapper)) : Object.assign({}, fieldsBox);
+        var buttons = collectByType(elements, 'button', []).filter(function (button) {
+            var box = nodeBox(button);
+            var insideField = fields.some(function (field) { return centerInside(box, field.bbox); });
+            return !insideField && centerInside(box, wrapper ? formBox : {
+                x: fieldsBox.x - 8, y: fieldsBox.y, width: fieldsBox.width + 16, height: fieldsBox.height + box.height * 3
+            });
+        });
+        if (!wrapper) {
+            var all = fields.map(function (field) { return field.bbox; }).concat(buttons.map(nodeBox));
+            fields.forEach(function (field) { if (field.labelBox) all.push(field.labelBox); });
+            formBox = groupBoundingBox(all);
+        }
+        var children = fields.concat(buttons).sort(function (a, b) { return nodeBox(a).y - nodeBox(b).y; });
+        var form = makeStructuredNode('form', 'form', children, .72);
+        form.bbox = formBox;
+        form.settings = { x: formBox.x, y: formBox.y, width: formBox.width, height: formBox.height };
+        form.style = wrapper ? Object.assign({}, wrapper.style) : {};
+        form.detection = { detectedBy: ['surface-geometry', 'alignment-analysis'], manual: false };
+        var kept = elements.filter(function (node) {
+            return node !== wrapper && !centerInside(nodeBox(node), formBox);
+        });
+        kept.push(form);
+        return kept.sort(function (a, b) { return nodeBox(a).y - nodeBox(b).y; });
+    }
+
     function makeFormNode(elements, confidence, detectedFields) {
         var fields = detectedFields || [];
         return makeStructuredNode('form', 'form', fields, confidence);
     }
 
+    function inputSurfaces(analysis, scope) {
+        return (analysis.surfaces || []).filter(function (surface) {
+            return surface.kind === 'input' && (!scope || boxIntersectsScope(surface, scope));
+        });
+    }
+
     function detectFormFields(analysis, textElements, scope) {
-        var candidates = (analysis.boxes || []).filter(function (box) {
+        var surfaceFields = inputSurfaces(analysis, scope);
+        var candidates = surfaceFields.length >= 2 ? surfaceFields : (analysis.boxes || []).filter(function (box) {
             if (scope && !boxIntersectsScope(box, scope)) return false;
             var ratio = box.width / Math.max(1, box.height);
             return box.width >= analysis.width * .16 &&
                 box.height >= 22 &&
-                box.height <= analysis.height * .12 &&
+                box.height <= analysis.width * .12 &&
                 ratio >= 2 &&
                 ratio <= 18 &&
                 box.variance < 45;
         });
         var aligned = candidates.filter(function (candidate) {
             return candidates.some(function (other) {
+                var gapLimit = Math.max(24, candidate.height * 2.5);
                 return other !== candidate &&
                     Math.abs(other.x - candidate.x) <= Math.max(16, candidate.width * .12) &&
-                    Math.abs((other.y + other.height) - candidate.y) <= Math.max(24, candidate.height * 1.5);
+                    (Math.abs((other.y + other.height) - candidate.y) <= gapLimit || Math.abs((candidate.y + candidate.height) - other.y) <= gapLimit);
             });
         });
         return aligned.map(function (box) {
@@ -1367,12 +1796,20 @@
                 return ((b.bbox || b.settings).y || 0) - ((a.bbox || a.settings).y || 0);
             })[0];
             var label = labelNode ? (labelNode.text || labelNode.content || '') : '';
+            var placeholder = textElements.filter(function (node) {
+                return centerInside(node.bbox || node.settings || { x: 0, y: 0, width: 0, height: 0 }, box);
+            }).sort(function (a, b) {
+                return ((a.bbox || a.settings).x || 0) - ((b.bbox || b.settings).x || 0);
+            }).map(function (node) { return node.text || node.content || ''; }).join(' ').trim();
+            var typical = candidates.map(function (item) { return item.height; }).sort(function (a, b) { return a - b; })[Math.floor(candidates.length / 2)] || box.height;
             return {
                 id: randomId(),
                 type: 'form-field',
-                fieldType: detectFieldType(label),
+                fieldType: detectFieldType(label, placeholder, box.height > typical * 1.8),
                 role: 'form-field',
                 label: label || 'Поле',
+                placeholder: placeholder,
+                labelBox: labelNode ? Object.assign({}, nodeBox(labelNode)) : null,
                 children: [],
                 elements: [],
                 bbox: { x: box.x, y: box.y, width: box.width, height: box.height },
@@ -1439,7 +1876,10 @@
         return top < scopeBottom && bottom > scopeTop;
     }
 
-    function detectFieldType(label) {
+    function detectFieldType(label, placeholder, tall) {
+        if (tall) return 'textarea';
+        if (/@/.test(placeholder || '')) return 'email';
+        if (/^[a-zа-яіїє]{1,4}[\/.\-][a-zа-яіїє]{1,4}[\/.\-][a-zа-яіїє]{2,4}$/i.test((placeholder || '').trim())) return 'date';
         if (/email|електрон/i.test(label)) return 'email';
         if (/телефон|phone/i.test(label)) return 'phone';
         if (/дата|date/i.test(label)) return 'date';
@@ -1506,27 +1946,30 @@
     function classifyTextNode(node, analysis) {
         var text = (node.text || '').trim();
         var settings = node.settings || {};
-        var isShort = text.length <= 32;
-        var isTop = settings.y < analysis.height * .18;
         var buttonBox = findButtonBox(node, analysis);
+        var badgeBox = buttonBox ? null : findSurfaceAround(node, analysis, 'badge');
         if (buttonBox) {
             node.type = 'button';
             node.role = 'primary-action';
             node.behavior = { type: 'unknown' };
             node.style.background = normalizeHexColor(buttonBox.background || '#ffffff');
             node.style.borderRadius = buttonBox.rounded || 0;
+            fitNodeToPlate(node, buttonBox);
             node.detection = {
                 detectedBy: ['ocr', 'opencv', 'button-geometry'],
                 manual: false,
                 visualBox: buttonBox
             };
             node.confidence = .82;
-        } else if (isShort && isTop && settings.width < analysis.width * .28) {
-            node.type = 'link';
-            node.role = 'navigation-item';
-            node.behavior = { type: 'unknown' };
-            node.confidence = 0.62;
-        } else if (settings.fontSize >= Math.max(18, analysis.height * .025)) {
+        } else if (badgeBox) {
+            node.type = 'badge';
+            node.role = 'status-badge';
+            node.style.background = normalizeHexColor(badgeBox.background || '#e2e8f0');
+            node.style.borderRadius = badgeBox.rounded || 0;
+            fitNodeToPlate(node, badgeBox);
+            node.detection = { detectedBy: ['ocr', 'surface-geometry'], manual: false, visualBox: badgeBox };
+            node.confidence = .74;
+        } else if ((settings.height || 0) >= analysis.medianLine * 1.45) {
             node.type = 'heading';
             node.role = 'heading';
         } else {
@@ -1551,12 +1994,40 @@
         var confidence = (words || []).reduce(function (sum, word) {
             return sum + Number(word.confidence || 0);
         }, 0) / Math.max(1, (words || []).length);
-        return letters >= 2 && letters / Math.max(1, text.length - symbols) >= .35 &&
-            (confidence >= 20 || letters >= 5);
+        var digits = (text.match(/[0-9]/g) || []).length;
+        return (letters >= 2 || digits >= 3) && (letters + digits) / Math.max(1, text.length - symbols) >= .35 &&
+            (confidence >= 20 || letters >= 5 || digits >= 5);
+    }
+
+    function findSurfaceAround(node, analysis, kind) {
+        var box = node.bbox || node.settings || {};
+        return (analysis.surfaces || []).find(function (candidate) {
+            return candidate.kind === kind &&
+                box.x >= candidate.x - 3 && box.y >= candidate.y - 3 &&
+                box.x + box.width <= candidate.x + candidate.width + 3 &&
+                box.y + box.height <= candidate.y + candidate.height + 3;
+        }) || null;
+    }
+
+    // Controls are positioned by their plate, not by the text inside it; the text is centred in the plate.
+    function fitNodeToPlate(node, plate) {
+        var fontSize = node.style && node.style.fontSize || node.settings && node.settings.fontSize;
+        node.bbox = { x: plate.x, y: plate.y, width: plate.width, height: plate.height };
+        node.settings = Object.assign({}, node.settings, {
+            x: plate.x, y: plate.y, width: plate.width, height: plate.height, fontSize: fontSize
+        });
     }
 
     function findButtonBox(node, analysis) {
         var box = node.bbox || node.settings || {};
+        var surface = (analysis.surfaces || []).find(function (candidate) {
+            return candidate.kind === 'button' &&
+                box.x >= candidate.x - 3 && box.y >= candidate.y - 3 &&
+                box.x + box.width <= candidate.x + candidate.width + 3 &&
+                box.y + box.height <= candidate.y + candidate.height + 3 &&
+                candidate.height <= box.height * 4;
+        });
+        if (surface) return surface;
         return (analysis.boxes || []).find(function (candidate) {
             var contains = box.x >= candidate.x && box.y >= candidate.y &&
                 box.x + box.width <= candidate.x + candidate.width &&
@@ -1590,9 +2061,9 @@
             var fontSize = Number(node.settings && node.settings.fontSize || 0);
             var shortTopHeading = node.type === 'heading' &&
                 node.bbox &&
-                node.bbox.y < analysis.height * .12 &&
+                node.bbox.y < analysis.width * .2 &&
                 (node.text || '').length <= 32 &&
-                fontSize <= Math.max(16, analysis.height * .022);
+                fontSize <= Math.max(16, analysis.width * .015);
             if (node.type === 'link' || shortTopHeading) {
                 navigation.push(node);
             } else {
@@ -1600,8 +2071,13 @@
             }
         });
         if (navigation.length < 2) return elements;
-        navigation.sort(function (a, b) { return a.bbox.x - b.bbox.x; });
-        var logo = navigation.shift();
+        navigation.sort(function (a, b) { return a.bbox.y - b.bbox.y || a.bbox.x - b.bbox.x; });
+        var firstNavY = navigation[0].bbox.y;
+        var logo = content.filter(function (node) {
+            return node.type === 'heading' && node.bbox && node.bbox.y < firstNavY;
+        }).sort(function (a, b) { return a.bbox.y - b.bbox.y; })[0] || null;
+        if (logo) content = content.filter(function (node) { return node !== logo; });
+        else logo = navigation.shift();
         var cta = navigation.filter(function (node) {
             return node.type === 'button';
         });
@@ -1631,13 +2107,13 @@
     function classifySection(textElements, analysis) {
         var validTextElements = (textElements || []).filter(function (item) { return item !== null; });
         var text = validTextElements.map(function (item) { return item.content || ''; }).join(' ').toLowerCase();
-        var topText = validTextElements.filter(function (item) { return (item.settings && item.settings.y || 0) < analysis.height * .2; });
+        var topText = validTextElements.filter(function (item) { return (item.settings && item.settings.y || 0) < analysis.width * .3; });
         var hasNavigation = topText.length >= 3 && topText.every(function (item) {
             return (item.settings.width || 0) < analysis.width * .3;
         });
         if (hasNavigation && topText.length >= 4) return 'header';
         if (/таблиц|дата і час|рівень шум|status|статус/.test(text) && analysis.boxes.length >= 3) return 'table-section';
-        if (/замовити|ім.?я|email|адрес|телефон/.test(text) && analysis.boxes.length >= 3) return 'form-section';
+        if (inputSurfaces(analysis).length >= 2) return 'form-section';
         if (/увага|alert|перевищ/.test(text)) return 'alert-section';
         return 'section';
     }
@@ -1769,21 +2245,7 @@
     }
 
     function groupWordsIntoLines(words) {
-        var lines = [];
-        words.slice().sort(function (a, b) { return a.y - b.y || a.x - b.x; }).forEach(function (word) {
-            var line = lines.find(function (candidate) {
-                return Math.abs(candidate.y - word.y) <= Math.max(8, word.height * .65);
-            });
-            if (!line) {
-                line = { x: word.x, y: word.y, width: 0, height: word.height, words: [] };
-                lines.push(line);
-            }
-            line.words.push(word);
-            line.x = Math.min(line.x, word.x);
-            line.width = Math.max(line.width, word.x + word.width - line.x);
-            line.height = Math.max(line.height, word.height);
-        });
-        return lines.sort(function (a, b) { return a.y - b.y; });
+        return window.PageGeneratorDetectors.groupWordsIntoLines(words);
     }
 
     function injectButton() {

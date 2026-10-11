@@ -38,4 +38,8 @@
 .page-generator-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; min-height: 16px; }
 .page-generator-block { --page-generator-block-gap: 0; }
 .page-generator-canvas > .page-generator-section { display: block; }
+.page-generator-block-editor-preview { min-height: 40px; padding: 8px; border: 1px dashed #818cf8; border-radius: 4px; background: #f8fafc; color: #334155; }
+.page-generator-block-type { display: inline-block; margin-bottom: 4px; padding: 1px 6px; border-radius: 3px; background: #e0e7ff; color: #3730a3; font-size: 11px; text-transform: uppercase; }
+.page-generator-block-text { margin-bottom: 4px; }
+.page-generator-block-editor-preview.is-button > .page-generator-block-text { display: inline-block; padding: 8px 16px; border-radius: 6px; background: #1f8a4c; color: #fff; font-weight: 600; }
 @media (max-width: 600px) { .page-generator-settings-grid { grid-template-columns: 1fr; } }

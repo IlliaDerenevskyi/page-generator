@@ -1,7 +1,8 @@
 {
   "private": true,
   "scripts": {
-    "install-browsers": "playwright install chromium"
+    "install-browsers": "playwright install chromium",
+    "test": "node --test"
   },
   "dependencies": {
     "playwright": "^1.52.0",

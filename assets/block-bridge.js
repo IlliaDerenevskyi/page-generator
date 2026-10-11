@@ -1,0 +1,98 @@
+(function (wp) {
+    'use strict';
+    if (!wp || !wp.hooks || !wp.blocks || !wp.element || !wp.blockEditor || !wp.components || !wp.compose) return;
+
+    var el = wp.element.createElement;
+    var Fragment = wp.element.Fragment;
+    var InspectorControls = wp.blockEditor.InspectorControls;
+    var PanelBody = wp.components.PanelBody;
+    var TextControl = wp.components.TextControl;
+    var BRIDGED = ['core/group', 'core/paragraph', 'core/heading', 'core/buttons', 'core/image', 'core/table'];
+    var BOX_FIELDS = [['x', 'X'], ['y', 'Y'], ['w', 'Ширина'], ['h', 'Висота'], ['fs', 'Розмір шрифту']];
+
+    // Core blocks keep their own markup; the pixel box is only an extra attribute, applied by CSS (frontend and editor alike).
+    wp.hooks.addFilter('blocks.registerBlockType', 'page-generator/bridge-attributes', function (settings, name) {
+        if (BRIDGED.indexOf(name) === -1) return settings;
+        settings.attributes = Object.assign({}, settings.attributes, {
+            pgBox: { type: 'object' },
+            pgCanvas: { type: 'object' }
+        });
+        return settings;
+    });
+
+    function numeric(value) {
+        if (value === '' || value === null || value === undefined) return undefined;
+        var number = Number(value);
+        return isFinite(number) ? number : undefined;
+    }
+
+    function boxVariables(attributes) {
+        var style = {};
+        var box = attributes.pgBox;
+        var canvas = attributes.pgCanvas;
+        if (box) {
+            ['x', 'y', 'w', 'h', 'fs'].forEach(function (key) {
+                if (typeof box[key] === 'number') style['--pg-' + key] = String(box[key]);
+            });
+        }
+        if (canvas) {
+            if (typeof canvas.w === 'number') style['--pg-w'] = String(canvas.w);
+            if (typeof canvas.h === 'number') style['--pg-h'] = String(canvas.h);
+        }
+        return style;
+    }
+
+    wp.hooks.addFilter('editor.BlockListBlock', 'page-generator/bridge-wrapper', wp.compose.createHigherOrderComponent(function (BlockListBlock) {
+        return function (props) {
+            var attributes = props.attributes || {};
+            if (BRIDGED.indexOf(props.name) === -1 || (!attributes.pgBox && !attributes.pgCanvas)) {
+                return el(BlockListBlock, props);
+            }
+            var classes = [props.className || ''];
+            if (attributes.pgBox) {
+                classes.push('pg-abs');
+                if (props.name === 'core/paragraph' || props.name === 'core/heading') classes.push('pg-text');
+            }
+            if (attributes.pgCanvas) classes.push('page-generator-canvas');
+            var wrapperProps = Object.assign({}, props.wrapperProps, {
+                style: Object.assign({}, props.wrapperProps && props.wrapperProps.style, boxVariables(attributes))
+            });
+            return el(BlockListBlock, Object.assign({}, props, { className: classes.join(' ').trim(), wrapperProps: wrapperProps }));
+        };
+    }, 'withPageGeneratorWrapper'));
+
+    wp.hooks.addFilter('editor.BlockEdit', 'page-generator/bridge-inspector', wp.compose.createHigherOrderComponent(function (BlockEdit) {
+        return function (props) {
+            var attributes = props.attributes || {};
+            if (BRIDGED.indexOf(props.name) === -1 || !props.isSelected || (!attributes.pgBox && !attributes.pgCanvas)) {
+                return el(BlockEdit, props);
+            }
+            var isCanvas = Boolean(attributes.pgCanvas);
+            var source = isCanvas ? attributes.pgCanvas : attributes.pgBox;
+            var key = isCanvas ? 'pgCanvas' : 'pgBox';
+            var fields = isCanvas ? [['w', 'Ширина джерела'], ['h', 'Висота джерела']] : BOX_FIELDS;
+            var controls = fields.map(function (field) {
+                return el(TextControl, {
+                    key: field[0],
+                    label: field[1] + ' (px)',
+                    type: 'number',
+                    value: source[field[0]] === undefined ? '' : source[field[0]],
+                    onChange: function (value) {
+                        var next = Object.assign({}, source);
+                        var parsed = numeric(value);
+                        if (parsed === undefined) delete next[field[0]]; else next[field[0]] = parsed;
+                        var update = {};
+                        update[key] = next;
+                        props.setAttributes(update);
+                    }
+                });
+            });
+            return el(Fragment, null,
+                el(BlockEdit, props),
+                el(InspectorControls, null,
+                    el(PanelBody, { title: isCanvas ? 'Page Generator: полотно' : 'Page Generator: положення', initialOpen: true }, controls)
+                )
+            );
+        };
+    }, 'withPageGeneratorInspector'));
+}(window.wp));

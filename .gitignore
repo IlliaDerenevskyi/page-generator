@@ -1,1 +1,6 @@
 /tools/node_modules/
+
+.browsers/
+tools/.browsers/
+node_modules/
+tools/node_modules/

@@ -1,0 +1,10 @@
+.page-generator-canvas { position: relative; width: 100%; box-sizing: border-box; isolation: isolate; }
+.page-generator-canvas, .page-generator-canvas * { box-sizing: border-box; }
+.page-generator-section { box-sizing: border-box; }
+.page-generator-elements { position: relative; width: 100%; height: 100%; }
+.page-generator-section h2, .page-generator-section p { color: inherit; }
+.page-generator-image-placeholder { min-height: 80px; background: #e2e8f0; }
+.page-generator-table { width: 100%; border-collapse: collapse; }
+.page-generator-table th, .page-generator-table td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; }
+.page-generator-icon { display: inline-flex; align-items: center; justify-content: center; min-width: 16px; min-height: 16px; }
+.page-generator-canvas > .page-generator-section { display: block; }
