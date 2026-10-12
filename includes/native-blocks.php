@@ -312,16 +312,8 @@ trait Page_Generator_Native_Blocks {
     }
 
     private function native_content($schema) {
-        $groups = [];
-        foreach (($schema['sections'] ?? []) as $section) {
-            $group_id = (string) ($section['sourceGroup'] ?? 'default');
-            if (!$groups || end($groups)['id'] !== $group_id) {
-                $groups[] = ['id' => $group_id, 'sections' => []];
-            }
-            $groups[count($groups) - 1]['sections'][] = $section;
-        }
         $content = [];
-        foreach ($groups as $group) {
+        foreach ($this->group_sections($schema) as $group) {
             $first = $group['sections'][0] ?? [];
             $width = absint($first['settings']['sourceWidth'] ?? 0);
             $height = absint($first['settings']['sourceHeight'] ?? 0);

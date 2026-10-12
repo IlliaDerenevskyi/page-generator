@@ -590,7 +590,7 @@ final class Page_Generator_Plugin {
         $updated = wp_update_post([
             'ID' => $post_id,
             'post_title' => $title,
-            'post_content' => $elementor_mode ? $block_content : $block_content,
+            'post_content' => $block_content,
         ], true);
         if (is_wp_error($updated)) {
             wp_send_json_error($updated->get_error_message());
@@ -808,99 +808,6 @@ final class Page_Generator_Plugin {
         return $this->native_content($schema);
     }
 
-    private function render_component_content($schema) {
-        $groups = [];
-        foreach (($schema['sections'] ?? []) as $section) {
-            $group_id = (string) ($section['sourceGroup'] ?? 'default');
-            if (!$groups || end($groups)['id'] !== $group_id) {
-                $groups[] = ['id' => $group_id, 'sections' => []];
-            }
-            $groups[count($groups) - 1]['sections'][] = $section;
-        }
-        $content = '';
-        foreach ($groups as $group) {
-            $first_section = $group['sections'][0] ?? [];
-            $width = absint($first_section['settings']['sourceWidth'] ?? 0);
-            $height = absint($first_section['settings']['sourceHeight'] ?? 0);
-            $dimensions = $width && $height ? ['width' => $width, 'height' => $height] : null;
-            $children = '';
-            foreach ($group['sections'] as $section) {
-                $children .= $this->serialize_component_block($section, $dimensions, true);
-            }
-            $attributes = ['width' => $width, 'height' => $height];
-            $content .= '<!-- wp:page-generator/canvas ' . wp_json_encode($attributes) . ' -->' . "\n"
-                . $children
-                . '<!-- /wp:page-generator/canvas -->' . "\n";
-        }
-        return $content;
-    }
-
-    private function serialize_gutenberg_node($node, $dimensions = null, $root_section = false) {
-        $type = sanitize_key($node['type'] ?? 'section');
-        $children = !empty($node['children']) && is_array($node['children']) ? $node['children'] : ($node['elements'] ?? []);
-        $inner = '';
-        foreach ($children as $child) {
-            $inner .= $this->serialize_gutenberg_node($child, $dimensions, false);
-        }
-
-        if ($type === 'heading') {
-            $text = esc_html($node['text'] ?? ($node['content'] ?? ''));
-            return '<!-- wp:heading -->' . "\n" . '<h2>' . $text . '</h2>' . "\n<!-- /wp:heading -->\n";
-        }
-        if ($type === 'text' || $type === 'link' || $type === 'logo' || $type === 'badge') {
-            $text = esc_html($node['text'] ?? ($node['content'] ?? ''));
-            return '<!-- wp:paragraph -->' . "\n" . '<p>' . $text . '</p>' . "\n<!-- /wp:paragraph -->\n";
-        }
-        if ($type === 'button') {
-            $label = sanitize_text_field($node['text'] ?? ($node['content'] ?? 'Кнопка'));
-            $url = esc_url_raw($node['behavior']['url'] ?? '#') ?: '#';
-            $style = is_array($node['style'] ?? null) ? $node['style'] : [];
-            $background = $this->normalize_color($style['background'] ?? ($node['background'] ?? ''));
-            $color = $this->normalize_color($style['color'] ?? ($node['color'] ?? ''));
-            $attributes = ['url' => $url, 'text' => $label];
-            $inline_style = '';
-            if (!empty($style['background']) || !empty($node['background'])) {
-                $attributes['style'] = ['color' => ['background' => $background]];
-                $inline_style .= 'background-color:' . esc_attr($background) . ';';
-            }
-            if (!empty($style['color']) || !empty($node['color'])) {
-                $attributes['style']['color']['text'] = $color;
-                $inline_style .= 'color:' . esc_attr($color) . ';';
-            }
-            return '<!-- wp:button ' . wp_json_encode($attributes, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->' . "\n"
-                . '<div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="' . esc_url($url) . '"' . ($inline_style ? ' style="' . $inline_style . '"' : '') . '>' . esc_html($label) . '</a></div>' . "\n"
-                . '<!-- /wp:button -->' . "\n";
-        }
-        if ($type === 'image') {
-            $asset = is_array($node['asset'] ?? null) ? $node['asset'] : [];
-            $url = esc_url($node['url'] ?? ($asset['url'] ?? ''));
-            $id = absint($node['attachmentId'] ?? ($asset['id'] ?? 0));
-            if (!$url) {
-                return '<!-- wp:group -->' . "\n"
-                    . '<div class="wp-block-group page-generator-image-placeholder" aria-label="Detected image"></div>' . "\n"
-                    . '<!-- /wp:group -->' . "\n";
-            }
-            $attributes = ['url' => $url, 'alt' => sanitize_text_field($node['alt'] ?? '')];
-            if ($id) {
-                $attributes['id'] = $id;
-            }
-            return '<!-- wp:image ' . wp_json_encode($attributes, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->' . "\n"
-                . '<figure class="wp-block-image"><img src="' . $url . '" alt="' . esc_attr($attributes['alt']) . '"' . ($id ? ' class="wp-image-' . $id . '"' : '') . '/></figure>' . "\n"
-                . '<!-- /wp:image -->' . "\n";
-        }
-        if ($type === 'form' || $type === 'form-field' || $type === 'table') {
-            $html = $this->render_node($node, $dimensions);
-            return '<!-- wp:html -->' . "\n" . $html . "\n<!-- /wp:html -->\n";
-        }
-        if (!$inner && in_array($type, ['section', 'header', 'footer', 'card', 'grid', 'gallery', 'navigation'], true)) {
-            $inner = '<p></p>';
-        }
-        if (!$inner) {
-            return '';
-        }
-        return '<!-- wp:group -->' . "\n" . '<div class="wp-block-group">' . "\n" . $inner . '</div>' . "\n<!-- /wp:group -->\n";
-    }
-
     private function is_elementor_page($post_id) {
         $data = get_post_meta($post_id, '_elementor_data', true);
         $edit_mode = get_post_meta($post_id, '_elementor_edit_mode', true);
@@ -963,7 +870,8 @@ final class Page_Generator_Plugin {
         return array_values(array_unique($errors));
     }
 
-    private function serialize_elementor_schema($schema) {
+    // Consecutive sections from one source (one screenshot or Figma frame) share a canvas.
+    private function group_sections($schema) {
         $groups = [];
         foreach (($schema['sections'] ?? []) as $section) {
             $group_id = (string) ($section['sourceGroup'] ?? 'default');
@@ -972,8 +880,12 @@ final class Page_Generator_Plugin {
             }
             $groups[count($groups) - 1]['sections'][] = $section;
         }
+        return $groups;
+    }
+
+    private function serialize_elementor_schema($schema) {
         $models = [];
-        foreach ($groups as $group) {
+        foreach ($this->group_sections($schema) as $group) {
             $first_section = $group['sections'][0] ?? [];
             $width = absint($first_section['settings']['sourceWidth'] ?? 0);
             $height = absint($first_section['settings']['sourceHeight'] ?? 0);
@@ -1052,6 +964,19 @@ final class Page_Generator_Plugin {
         if ($type === 'icon') {
             return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'icon', 'settings' => [], 'elements' => []], $node, $parent_bbox);
         }
+        if (in_array($type, ['link', 'logo', 'badge'], true)) {
+            $label = esc_html($node['text'] ?? ($node['content'] ?? ''));
+            $widget_settings = ['editor' => $type === 'badge' ? '<span class="pg-badge">' . $label . '</span>' : '<p>' . $label . '</p>'];
+            if ($text_color !== '#ffffff' || !empty($style['color']) || !empty($node['color'])) {
+                $widget_settings['text_color'] = $text_color;
+            }
+            $font = $style['fontSize'] ?? ($settings['fontSize'] ?? null);
+            if (is_numeric($font) && $font > 0) {
+                $widget_settings['typography_typography'] = 'custom';
+                $widget_settings['typography_font_size'] = ['unit' => 'px', 'size' => max(10, absint($font))];
+            }
+            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => $widget_settings, 'elements' => []], $node, $parent_bbox);
+        }
         if ($type === 'form' || $type === 'form-field' || $type === 'table') {
             return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'html', 'settings' => ['html' => $this->render_node($node)], 'elements' => []], $node, $parent_bbox);
         }
@@ -1084,24 +1009,33 @@ final class Page_Generator_Plugin {
         if (!$bbox || !$parent_bbox || empty($parent_bbox['width']) || empty($parent_bbox['height'])) {
             return $model;
         }
+        // Elementor 4.x control keys: containers use position/_offset_x/_offset_y/width,
+        // widgets use _position/_offset_x/_offset_y and _element_width + _element_custom_width.
+        // A wrong key is silently ignored, which is why items used to fall into normal flow.
         $container = $model['elType'] === 'container';
         $prefix = $container ? '' : '_';
         $model['settings'][$prefix . 'position'] = 'absolute';
-        $model['settings'][$prefix . 'offset_x'] = [
+        $model['settings']['_offset_x'] = [
             'unit' => 'px',
             'size' => round((float) ($bbox['x'] ?? 0) - (float) ($parent_bbox['x'] ?? 0), 2),
             'sizes' => [],
         ];
-        $model['settings'][$prefix . 'offset_y'] = [
+        $model['settings']['_offset_y'] = [
             'unit' => 'px',
             'size' => round((float) ($bbox['y'] ?? 0) - (float) ($parent_bbox['y'] ?? 0), 2),
             'sizes' => [],
         ];
-        $model['settings'][$prefix . 'width'] = [
+        $width = [
             'unit' => 'px',
             'size' => max(1, round((float) ($bbox['width'] ?? 0), 2)),
             'sizes' => [],
         ];
+        if ($container) {
+            $model['settings']['width'] = $width;
+        } else {
+            $model['settings']['_element_width'] = 'initial';
+            $model['settings']['_element_custom_width'] = $width;
+        }
         if ($container) {
             $model['settings']['min_height'] = [
                 'unit' => 'px',
@@ -1112,56 +1046,14 @@ final class Page_Generator_Plugin {
         return $model;
     }
 
+    // Forms are rendered whole from their schema (server-side) so they stay real <form>/<input> elements.
     private function serialize_component_block($node, $dimensions = null, $root_section = false) {
-        if (($node['type'] ?? '') === 'button' && (!$dimensions || empty($node['bbox']))) {
-            $label = sanitize_text_field($node['text'] ?? ($node['content'] ?? 'Кнопка'));
-            $url = esc_url_raw($node['behavior']['url'] ?? '#');
-            $attributes = [
-                'url' => $url ?: '#',
-                'text' => $label,
-            ];
-            $style = is_array($node['style'] ?? null) ? $node['style'] : [];
-            $background = $this->normalize_color($style['background'] ?? ($node['background'] ?? ''));
-            $color = $this->normalize_color($style['color'] ?? ($node['color'] ?? ''));
-            $link_style = '';
-            if ($background !== '#ffffff' || !empty($style['background']) || !empty($node['background'])) {
-                $attributes['style'] = ['color' => ['background' => $background]];
-                $link_style .= 'background-color:' . esc_attr($background) . ';';
-            }
-            if ($color !== '#ffffff' || !empty($style['color']) || !empty($node['color'])) {
-                $attributes['style']['color']['text'] = $color;
-                $link_style .= 'color:' . esc_attr($color) . ';';
-            }
-            if (!empty($style['borderRadius'])) {
-                $link_style .= 'border-radius:' . absint($style['borderRadius']) . 'px;';
-            }
-            return '<!-- wp:button ' . wp_json_encode($attributes, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->' . "\n"
-                . '<div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="' . esc_url($url ?: '#') . '"' . ($link_style ? ' style="' . $link_style . '"' : '') . '>' . esc_html($label) . '</a></div>' . "\n"
-                . '<!-- /wp:button -->' . "\n";
-        }
         $attributes = [
             'node' => $node,
             'dimensions' => $dimensions ?: new stdClass(),
             'rootSection' => (bool) $root_section,
         ];
-        $children = '';
-        $nodes = !empty($node['children']) && is_array($node['children']) ? $node['children'] : ($node['elements'] ?? []);
-        $child_dimensions = $dimensions;
-        if ($child_dimensions && !empty($node['bbox'])) {
-            // Child boxes are in page coordinates, so each level re-bases on its own box (not cumulatively).
-            $child_dimensions['width'] = max(1, (float) ($node['bbox']['width'] ?? $dimensions['width']));
-            $child_dimensions['height'] = max(1, (float) ($node['bbox']['height'] ?? $dimensions['height']));
-            $child_dimensions['offsetX'] = (float) ($node['bbox']['x'] ?? 0);
-            $child_dimensions['offsetY'] = (float) ($node['bbox']['y'] ?? 0);
-        }
-        // Forms and tables are rendered whole from their schema so they stay real <form>/<table> elements.
-        if (!in_array($node['type'] ?? '', ['form', 'table'], true)) {
-            foreach ($nodes as $child) {
-                $children .= $this->serialize_component_block($child, $child_dimensions, false);
-            }
-        }
         return '<!-- wp:page-generator/component ' . wp_json_encode($attributes, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ' -->' . "\n"
-            . $children
             . '<!-- /wp:page-generator/component -->' . "\n";
     }
 

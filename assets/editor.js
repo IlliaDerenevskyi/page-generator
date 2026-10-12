@@ -332,8 +332,16 @@
                 $('#pg-status').html('Page оновлено.<br><br>Візуальна відповідність: <strong>' + result.visualSimilarity.toFixed(2) + '%</strong><br>Перцептивна відповідність: <strong>' + Number(result.perceptualSimilarity || 0).toFixed(2) + '%</strong><br>Текстова відповідність: <strong>' + result.textSimilarity.toFixed(2) + '%</strong><br>DOM-відповідність: <strong>' + result.domSimilarity.toFixed(2) + '%</strong><br><span class="page-generator-note">Reference: ' + result.referenceSize + ', rendered: ' + result.renderedSize + ', tokens: ' + result.sourceTokenCount + ' → ' + result.renderedTokenCount + ', nodes: ' + result.sourceNodeCount + ' → ' + result.renderedNodeCount + '.</span>' + (result.renderedUrl ? '<br><a href="' + result.renderedUrl + '" target="_blank" rel="noopener">Відкрити rendered screenshot</a>' : '') + (result.diffUrl ? '<br><a href="' + result.diffUrl + '" target="_blank" rel="noopener">Відкрити diff screenshot</a>' : '') + '<br><br>Найбільші розбіжності:<br>' + (result.differences.length ? result.differences.map(function (item) { return '- ' + item; }).join('<br>') : '- не виявлено') + '<br><br><button type="button" id="pg-finish" class="page-generator-button page-generator-button-primary">Готово</button>');
                 $('#pg-finish').on('click', function () { $('#page-generator-modal').remove(); });
             }).catch(function (error) {
-                $('#pg-status').html('Поточну WordPress Page оновлено як ' + response.data.status + '.<br>Сторінку оновлено, але screenshot-порівняння не виконано: ' + error.message + '<br><button type="button" id="pg-finish" class="page-generator-button page-generator-button-primary">Готово</button>');
-                $('#pg-finish').on('click', function () { $('#page-generator-modal').remove(); });
+                var updated = 'Поточну WordPress Page оновлено як ' + response.data.status + '.<br>Screenshot-порівняння не виконано: ' + error.message;
+                var finish = '<br><button type="button" id="pg-finish" class="page-generator-button page-generator-button-primary">Готово</button>';
+                $('#pg-status').html(updated + '<br>DOM-порівняння в браузері...');
+                compareInBrowser(response.data.compareUrl || response.data.viewUrl, schema).then(function (result) {
+                    $('#pg-status').html(updated + '<br><br>DOM-відповідність (без Playwright): <strong>' + result.score + '%</strong><br><span class="page-generator-note">' + result.details + '</span>' + finish);
+                }).catch(function (domError) {
+                    $('#pg-status').html(updated + '<br>DOM-порівняння теж не виконано: ' + domError.message + finish);
+                }).then(function () {
+                    $('#pg-finish').on('click', function () { $('#page-generator-modal').remove(); });
+                });
             });
         }).fail(function (xhr) {
             var message = 'AJAX-запит оновлення поточної Page не виконано.';
@@ -380,15 +388,53 @@
         });
     }
 
+    // Fallback when the Playwright runner is unavailable: loads the same-origin preview in a hidden frame and scores its DOM.
+    function compareInBrowser(url, schema) {
+        return new Promise(function (resolve, reject) {
+            if (!url) {
+                reject(new Error('Немає URL сторінки.'));
+                return;
+            }
+            var section = schema.sections && schema.sections[0];
+            var width = Number(section && section.settings && section.settings.sourceWidth) || Number(schema.containerWidth) || 1200;
+            var frame = document.createElement('iframe');
+            var timeout = setTimeout(function () { done(new Error('Сторінка не завантажилася за 30 секунд.')); }, 30000);
+            function done(error, result) {
+                clearTimeout(timeout);
+                frame.remove();
+                if (error) reject(error); else resolve(result);
+            }
+            frame.setAttribute('aria-hidden', 'true');
+            frame.style.cssText = 'position:fixed;left:-20000px;top:0;width:' + width + 'px;height:900px;border:0;';
+            frame.onload = function () {
+                try {
+                    var doc = frame.contentDocument;
+                    if (!doc || !doc.body) throw new Error('Немає доступу до документа сторінки.');
+                    var root = doc.querySelector('[data-page-generator="canvas"], .page-generator-canvas');
+                    if (!root) throw new Error('Полотно Page Generator на сторінці не знайдено.');
+                    done(null, compareDomFeatures(root, schema));
+                } catch (error) {
+                    done(error);
+                }
+            };
+            frame.src = url;
+            document.body.appendChild(frame);
+        });
+    }
+
     function compareDomFeatures(body, schema) {
         var sourceText = [];
         var sourceRegions = 0;
         var sourceColors = schema.tokens && schema.tokens.colors ? schema.tokens.colors : [];
+        var collectText = function (nodes) {
+            (nodes || []).forEach(function (node) {
+                if (node.text || node.content) sourceText.push(node.text || node.content);
+                collectText(getNodeChildren(node));
+            });
+        };
         (schema.sections || []).forEach(function (section) {
             sourceRegions += (section.detectedRegions || []).length;
-            (section.elements || []).forEach(function (element) {
-                if (element.content) sourceText.push(element.content);
-            });
+            collectText(getNodeChildren(section));
         });
         var renderedText = body.innerText || '';
         var sourceTokens = tokenize(sourceText.join(' '));
@@ -400,7 +446,7 @@
         var regionScore = sourceRegions ? Math.min(1, elementCount / sourceRegions) : (elementCount ? 1 : 0);
         var colorScore = compareRenderedColors(renderedElements, sourceColors);
         var score = Math.round((textScore * 55) + (regionScore * 25) + (colorScore * 20));
-        var itemNode = {
+        return {
             score: Math.min(100, score),
             details: 'DOM-вузлів ' + domTree.length + ', текст ' + Math.round(textScore * 100) + '%, структура ' + Math.round(regionScore * 100) + '%, кольори ' + Math.round(colorScore * 100) + '%'
         };
@@ -445,7 +491,7 @@
         if (!sourceColors.length || !elements.length) return sourceColors.length ? 0 : 1;
         var renderedColors = {};
         Array.prototype.forEach.call(elements, function (element) {
-            var styles = window.getComputedStyle(element);
+            var styles = element.ownerDocument.defaultView.getComputedStyle(element);
             renderedColors[normalizeColor(styles.color)] = true;
             renderedColors[normalizeColor(styles.backgroundColor)] = true;
             renderedColors[normalizeColor(styles.borderColor)] = true;
@@ -634,24 +680,19 @@
     function positionElementorModel(model, node, parentBox) {
         var box = node.bbox;
         if (!box || !parentBox || !parentBox.width || !parentBox.height) return model;
+        // Same Elementor 4.x keys as the server serializer (see apply_elementor_geometry): a wrong key is silently ignored.
         var isContainer = model.elType === 'container';
-        var prefix = isContainer ? '' : '_';
-        model.settings[prefix + 'position'] = 'absolute';
-        model.settings[prefix + 'offset_x'] = {
-            unit: 'px',
-            size: Number(box.x || 0) - Number(parentBox.x || 0),
-            sizes: []
-        };
-        model.settings[prefix + 'offset_y'] = {
-            unit: 'px',
-            size: Number(box.y || 0) - Number(parentBox.y || 0),
-            sizes: []
-        };
-        model.settings[prefix + 'width'] = {
-            unit: 'px',
-            size: Math.max(1, Number(box.width || 0)),
-            sizes: []
-        };
+        var size = { unit: 'px', sizes: [] };
+        model.settings[isContainer ? 'position' : '_position'] = 'absolute';
+        model.settings._offset_x = $.extend({}, size, { size: Number(box.x || 0) - Number(parentBox.x || 0) });
+        model.settings._offset_y = $.extend({}, size, { size: Number(box.y || 0) - Number(parentBox.y || 0) });
+        var width = $.extend({}, size, { size: Math.max(1, Number(box.width || 0)) });
+        if (isContainer) {
+            model.settings.width = width;
+        } else {
+            model.settings._element_width = 'initial';
+            model.settings._element_custom_width = width;
+        }
         return model;
     }
 
@@ -762,14 +803,11 @@
                     canvas.height = image.naturalHeight;
                     var context = canvas.getContext('2d', { willReadFrequently: true });
                     context.drawImage(image, 0, 0);
-                    var surfaces = [];
-                    if (window.PageGeneratorDetectors) {
-                        var pixelData = context.getImageData(0, 0, canvas.width, canvas.height).data;
-                        surfaces = window.PageGeneratorDetectors.classifySurfaces(
-                            window.PageGeneratorDetectors.detectSurfaces(pixelData, canvas.width, canvas.height),
-                            canvas.width, pixelData, canvas.height
-                        );
-                    }
+                    var pixelData = context.getImageData(0, 0, canvas.width, canvas.height).data;
+                    var surfaces = window.PageGeneratorDetectors.classifySurfaces(
+                        window.PageGeneratorDetectors.detectSurfaces(pixelData, canvas.width, canvas.height),
+                        canvas.width, pixelData, canvas.height
+                    );
                     Promise.all([
                         recognizeScreenshot(canvas),
                         detectScreenshotRegions(canvas)
@@ -852,12 +890,9 @@
     function recognizeScreenshot(canvas) {
         var tools = window.PageGeneratorDetectors;
         var image = canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height);
-        var prepared = tools ? tools.prepareForOcr(image.data, canvas.width, canvas.height) : null;
-        if (!prepared) {
-            prepared = { data: image.data, width: canvas.width, height: canvas.height, scale: 1, textHeight: 0 };
-        }
+        var prepared = tools.prepareForOcr(image.data, canvas.width, canvas.height);
         var variants = [prepared];
-        if (tools && prepared.scale > 1 && prepared.textHeight > 0 && prepared.textHeight < 16) {
+        if (prepared.scale > 1 && prepared.textHeight > 0 && prepared.textHeight < 16) {
             variants.push(tools.prepareForOcr(image.data, canvas.width, canvas.height, { sharpen: false, scale: prepared.scale }));
         }
         return Tesseract.createWorker(PageGeneratorConfig.ocrLanguages || 'ukr+eng')
@@ -935,14 +970,10 @@
                     crop.height = Math.round(plate.height * scale);
                     var context = crop.getContext('2d', { willReadFrequently: true });
                     var region = canvas.getContext('2d', { willReadFrequently: true }).getImageData(plate.x, plate.y, plate.width, plate.height);
-                    if (window.PageGeneratorDetectors) {
-                        context.putImageData(new ImageData(
-                            window.PageGeneratorDetectors.resampleLanczos(region.data, plate.width, plate.height, crop.width, crop.height),
-                            crop.width, crop.height
-                        ), 0, 0);
-                    } else {
-                        context.drawImage(canvas, plate.x, plate.y, plate.width, plate.height, 0, 0, crop.width, crop.height);
-                    }
+                    context.putImageData(new ImageData(
+                        window.PageGeneratorDetectors.resampleLanczos(region.data, plate.width, plate.height, crop.width, crop.height),
+                        crop.width, crop.height
+                    ), 0, 0);
                     var image = context.getImageData(0, 0, crop.width, crop.height);
                     for (var index = 0; index < image.data.length; index += 4) {
                         var distance = Math.abs(image.data[index] - plate.fill[0]) + Math.abs(image.data[index + 1] - plate.fill[1]) + Math.abs(image.data[index + 2] - plate.fill[2]);
@@ -1013,7 +1044,7 @@
             source.delete(); gray.delete(); edges.delete(); contours.delete(); hierarchy.delete(); kernel.delete();
             resolve({
                 boxes: boxes,
-                sections: window.PageGeneratorDetectors ? window.PageGeneratorDetectors.detectBands(pixels, canvas.width, canvas.height) : detectSectionBands(canvas),
+                sections: window.PageGeneratorDetectors.detectBands(pixels, canvas.width, canvas.height),
                 colors: Object.keys(colorCounts).sort(function (a, b) { return colorCounts[b] - colorCounts[a]; }).slice(0, 12)
             });
         });
@@ -1031,10 +1062,7 @@
             .sort(function (a, b) { return (b.width * b.height) - (a.width * a.height); })
             .slice(0, 120)
             .map(function (box) {
-                var photographic = pixelData && window.PageGeneratorDetectors
-                    ? window.PageGeneratorDetectors.isPhotographic(pixelData, canvas.width, box)
-                    : box.variance > 35;
-                box.kind = photographic ? 'photo-candidate' : 'surface-candidate';
+                box.kind = window.PageGeneratorDetectors.isPhotographic(pixelData, canvas.width, box) ? 'photo-candidate' : 'surface-candidate';
                 box.textLike = box.width < canvas.width * .55 && box.height < canvas.width * .18 && box.variance < 45;
                 box.rounded = estimateRoundedCorners(canvas, box);
                 box.gradient = estimateGradient(canvas, box);
@@ -1120,41 +1148,6 @@
         return difference > 55 ? { type: 'linear', angle: 90 } : null;
     }
 
-    function detectSectionBands(canvas) {
-        var context = canvas.getContext('2d', { willReadFrequently: true });
-        var bands = [];
-        var step = Math.max(2, Math.floor(canvas.height / 180));
-        var previous = null;
-        var start = 0;
-        for (var y = 0; y < canvas.height; y += step) {
-            var color = averageRowColor(context, canvas.width, y, Math.max(1, Math.floor(canvas.width / 40)));
-            if (previous && colorDistance(color, previous) > 28) {
-                if (y - start >= canvas.height * .04) bands.push({ y: start, height: y - start, background: rgbToHex(previous) });
-                start = y;
-            }
-            previous = color;
-        }
-        if (canvas.height - start >= canvas.height * .04 && previous) {
-            bands.push({ y: start, height: canvas.height - start, background: rgbToHex(previous) });
-        }
-        return mergeSectionBands(bands, canvas.height);
-    }
-
-    function mergeSectionBands(bands, height) {
-        var merged = [];
-        bands.forEach(function (band) {
-            var previous = merged[merged.length - 1];
-            if (previous && colorDistance(hexToRgb(previous.background), hexToRgb(band.background)) < 18) {
-                previous.height = band.y + band.height - previous.y;
-            } else {
-                merged.push({ y: band.y, height: band.height, background: band.background });
-            }
-        });
-        return merged.filter(function (band) {
-            return band.height >= height * .06;
-        });
-    }
-
     function hexToRgb(value) {
         var match = String(value || '').replace('#', '').match(/^([0-9a-f]{6})$/i);
         return match ? [parseInt(match[1].slice(0, 2), 16), parseInt(match[1].slice(2, 4), 16), parseInt(match[1].slice(4, 6), 16)] : [255, 255, 255];
@@ -1179,15 +1172,6 @@
             counts[color] = (counts[color] || 0) + 1;
         });
         return Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; })[0] || '#ffffff';
-    }
-
-    function averageRowColor(context, width, y, step) {
-        var red = 0, green = 0, blue = 0, count = 0;
-        for (var x = 0; x < width; x += step) {
-            var pixel = context.getImageData(x, y, 1, 1).data;
-            red += pixel[0]; green += pixel[1]; blue += pixel[2]; count += 1;
-        }
-        return [red / count, green / count, blue / count];
     }
 
     function colorDistance(first, second) {
@@ -1288,7 +1272,6 @@
     }
 
     function markMenuRuns(textElements, analysis) {
-        if (!window.PageGeneratorDetectors) return;
         var bands = analysis.sections || [];
         var nearEdge = function (box) {
             if (bands.length < 3) return box.y < analysis.width * .5 || box.y > analysis.height - analysis.width * .5;
@@ -1479,7 +1462,7 @@
                     }
                     content.forEach(function (item) { usedText[item.id] = true; });
                     var itemChildren = content;
-                    return {
+                    var itemNode = {
                         id: randomId(),
                         type: itemType === 'image' ? 'image' : 'card',
                         role: itemType === 'image' ? 'image' : 'content-card',
@@ -1504,15 +1487,8 @@
                         elements: itemChildren,
                         behavior: { type: 'none' },
                         confidence: itemType === 'image' ? 0.68 : 0.72,
-                        source: { detectedBy: ['opencv', 'ocr', 'texture-analysis'], manual: false }
+                        detection: { detectedBy: ['opencv', 'ocr', 'texture-analysis'], regionIndex: index, manual: false }
                     };
-                    if (itemNode) {
-                        itemNode.detection = {
-                            detectedBy: ['opencv', 'ocr', 'texture-analysis'],
-                            regionIndex: index,
-                            manual: false
-                        };
-                    }
                     return itemNode;
                 }).filter(function (item) { return item !== null; });
                 if (items.length < 2) return;
@@ -1784,11 +1760,6 @@
         });
         kept.push(form);
         return kept.sort(function (a, b) { return nodeBox(a).y - nodeBox(b).y; });
-    }
-
-    function makeFormNode(elements, confidence, detectedFields) {
-        var fields = detectedFields || [];
-        return makeStructuredNode('form', 'form', fields, confidence);
     }
 
     function inputSurfaces(analysis, scope) {
