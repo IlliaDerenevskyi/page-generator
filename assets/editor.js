@@ -110,7 +110,10 @@
         return analysisPromise;
     }
 
-    function deriveContentBands(elements, analysis) {
+    // Splits a region (default: the whole page) into bands at vertical gaps between its elements.
+    function deriveContentBands(elements, analysis, extent) {
+        var from = extent ? extent.y : 0;
+        var to = extent ? extent.y + extent.height : analysis.height;
         var boxes = (elements || []).map(function (node) {
             var box = node.bbox || node.settings || {};
             return { y: Number(box.y || 0), height: Number(box.height || 0) };
@@ -120,7 +123,8 @@
         boxes.forEach(function (box) {
             var last = groups[groups.length - 1];
             var lastBottom = last ? last.bottom : 0;
-            if (!last || box.y - lastBottom > Math.max(32, analysis.width * .058)) {
+            // Real section gaps on 2x-wide captures are ~80–100 px (0.03 × width); 0.058 merged the whole page into one band.
+            if (!last || box.y - lastBottom > Math.max(32, analysis.width * .025)) {
                 groups.push({ top: box.y, bottom: box.y + box.height });
             } else {
                 last.bottom = Math.max(last.bottom, box.y + box.height);
@@ -131,13 +135,33 @@
         groups.forEach(function (group, index) {
             var previous = index ? groups[index - 1] : null;
             var next = groups[index + 1] || null;
-            var y = previous ? Math.round((previous.bottom + group.top) / 2) : 0;
-            var bottom = next ? Math.round((group.bottom + next.top) / 2) : analysis.height;
+            var y = previous ? Math.round((previous.bottom + group.top) / 2) : from;
+            var bottom = next ? Math.round((group.bottom + next.top) / 2) : to;
             if (bottom - y >= analysis.width * .04) {
-                bands.push({ y: y, height: bottom - y, background: analysis.colors && analysis.colors[0] || '#ffffff' });
+                bands.push({ y: y, height: bottom - y, background: sampleBandColor(analysis.canvas, y, bottom - y) });
             }
         });
         return bands;
+    }
+
+    // Band background = most common colour on its left and right edges (the page-wide palette hides a dark footer).
+    function sampleBandColor(canvas, y, height) {
+        if (!canvas || height <= 0) return '#ffffff';
+        var context = canvas.getContext('2d', { willReadFrequently: true });
+        var top = Math.max(0, Math.floor(y));
+        var bottom = Math.min(canvas.height, Math.floor(y + height));
+        var step = Math.max(1, Math.floor((bottom - top) / 40));
+        var counts = {};
+        for (var row = top; row < bottom; row += step) {
+            [2, canvas.width - 3].forEach(function (column) {
+                var pixel = context.getImageData(column, row, 1, 1).data;
+                var key = (pixel[0] >> 3) + ',' + (pixel[1] >> 3) + ',' + (pixel[2] >> 3);
+                counts[key] = counts[key] || { n: 0, rgb: [pixel[0], pixel[1], pixel[2]] };
+                counts[key].n += 1;
+            });
+        }
+        var best = Object.keys(counts).sort(function (a, b) { return counts[b].n - counts[a].n; })[0];
+        return best ? normalizeHexColor(rgbToHex(counts[best].rgb), '#ffffff') : '#ffffff';
     }
 
     function openPageGenerator() {
@@ -385,6 +409,10 @@
         }).then(function (response) {
             if (!response.success) throw new Error(response.data || 'Playwright не виконав порівняння.');
             return response.data;
+        }, function (xhr) {
+            // jQuery rejects with the XHR object, not an Error: without this the status line shows "undefined".
+            var reason = xhr && xhr.responseJSON && xhr.responseJSON.data ? xhr.responseJSON.data : (xhr && xhr.status ? 'HTTP ' + xhr.status + (xhr.statusText ? ' ' + xhr.statusText : '') : 'мережева помилка або запит перервано');
+            throw new Error('Запит порівняння не пройшов: ' + reason);
         });
     }
 
@@ -409,7 +437,12 @@
             frame.onload = function () {
                 try {
                     var doc = frame.contentDocument;
-                    if (!doc || !doc.body) throw new Error('Немає доступу до документа сторінки.');
+                    if (!doc || !doc.body) {
+                        // Usually the preview opened on another origin (scheme, host or port differ from this admin page).
+                        var frameOrigin = '';
+                        try { frameOrigin = frame.contentWindow.location.origin; } catch (ignored) { frameOrigin = 'невідомо'; }
+                        throw new Error('Немає доступу до документа сторінки (сторінка відкрилась з ' + frameOrigin + ', адмінка з ' + window.location.origin + ').');
+                    }
                     var root = doc.querySelector('[data-page-generator="canvas"], .page-generator-canvas');
                     if (!root) throw new Error('Полотно Page Generator на сторінці не знайдено.');
                     done(null, compareDomFeatures(root, schema));
@@ -520,205 +553,21 @@
             $('#pg-status').text('Активний контейнер Elementor не знайдено.');
             return;
         }
-        var groups = [];
-        schema.sections.forEach(function (section) {
-            var groupId = section.sourceGroup || 'default';
-            var group = groups[groups.length - 1];
-            if (!group || group.id !== groupId) {
-                group = { id: groupId, sections: [] };
-                groups.push(group);
-            }
-            group.sections.push(section);
-        });
-        var models = groups.map(function (group) {
-            var section = group.sections[0] || {};
-            var width = Number(section.settings && section.settings.sourceWidth || 0);
-            var height = Number(section.settings && section.settings.sourceHeight || 0);
-            var containerWidth = Number($('#page-generator-modal').data('schema').containerWidth || 1200);
-            var displayWidth = width ? Math.min(width, containerWidth) : 0;
-            var parentBox = { x: 0, y: 0, width: width, height: height };
-            var settings = {
-                css_classes: 'page-generator-canvas',
-                flex_direction: 'column',
-                content_width: width ? 'boxed' : 'full'
-            };
-            if (displayWidth) settings.boxed_width = { unit: 'px', size: displayWidth };
-            if (displayWidth && height) settings.min_height = { unit: 'px', size: Math.round(height * displayWidth / width) };
-            return {
-                id: randomId(),
-                elType: 'container',
-                isInner: false,
-                settings: settings,
-                elements: group.sections.map(function (node) {
-                    return toElementorModel(node, parentBox);
-                })
-            };
-        });
-        Promise.all(models.map(function (model) {
-            return window.$e.run('document/elements/create', { container: root, model: model });
-        })).then(function () {
-            $('#pg-status').text('Схему вставлено в Elementor.');
-        }).catch(function () {
-            $('#pg-status').text('Не вдалося вставити схему в Elementor.');
-        });
-    }
-
-    function toElementorModel(node, parentBox) {
-        var children = getNodeChildren(node);
-        var settings = node.settings || {};
-        var style = node.style || {};
-        var textColor = normalizeHexColor(style.color || node.color || '');
-        var backgroundColor = normalizeHexColor(style.background || node.background || '');
-        var hasTextColor = Boolean(style.color || node.color);
-        var hasBackgroundColor = Boolean(style.background || node.background);
-        if (node.type === 'heading') {
-            var headingSettings = { title: node.content || node.text || '' };
-            if (hasTextColor) headingSettings.title_color = textColor;
-            if (style.fontSize || settings.fontSize) {
-                headingSettings.typography_typography = 'custom';
-                headingSettings.typography_font_size = {
-                    unit: 'px',
-                    size: Math.max(10, Number(style.fontSize || settings.fontSize || 16))
-                };
-            }
-            return positionElementorModel({ id: randomId(), elType: 'widget', widgetType: 'heading', settings: headingSettings, elements: [] }, node, parentBox);
-        }
-        if (node.type === 'text') {
-            var textSettings = { editor: node.content || node.text || '' };
-            if (hasTextColor) textSettings.text_color = textColor;
-            return positionElementorModel({ id: randomId(), elType: 'widget', widgetType: 'text-editor', settings: textSettings, elements: [] }, node, parentBox);
-        }
-        if (node.type === 'image') {
-            var imageAsset = node.asset || {};
-            return positionElementorModel({
-                id: randomId(),
-                elType: 'widget',
-                widgetType: 'image',
-                settings: { image: { url: node.url || imageAsset.url || '', id: node.attachmentId || imageAsset.id || '' } },
-                elements: []
-            }, node, parentBox);
-        }
-        if (node.type === 'button') {
-            var buttonSettings = {
-                text: node.text || node.content || 'Кнопка',
-                link: { url: node.behavior && node.behavior.url ? node.behavior.url : '#' }
-            };
-            if (hasTextColor) buttonSettings.button_text_color = textColor;
-            if (hasBackgroundColor) buttonSettings.background_color = backgroundColor;
-            return positionElementorModel({
-                id: randomId(),
-                elType: 'widget',
-                widgetType: 'button',
-                settings: buttonSettings,
-                elements: []
-            }, node, parentBox);
-        }
-        if (node.type === 'link' || node.type === 'logo') {
-            return positionElementorModel({
-                id: randomId(),
-                elType: 'widget',
-                widgetType: 'heading',
-                settings: { title: node.text || node.content || '' },
-                elements: []
-            }, node, parentBox);
-        }
-        if (node.type === 'form-field') {
-            var fieldType = ['email', 'phone', 'date', 'text', 'select', 'textarea', 'checkbox'].indexOf(node.fieldType) !== -1
-                ? node.fieldType : 'text';
-            var fieldLabel = escapeElementorText(node.label || 'Поле');
-            return positionElementorModel({
-                id: randomId(),
-                elType: 'widget',
-                widgetType: 'html',
-                settings: {
-                    html: '<label class="page-generator-form-field"><span>' + fieldLabel +
-                        '</span><input type="' + (fieldType === 'phone' ? 'tel' : escapeElementorText(fieldType)) +
-                        '" placeholder="' + fieldLabel + '"></label>'
-                },
-                elements: []
-            }, node, parentBox);
-        }
-        if (node.type === 'form' || node.type === 'table') {
-            return positionElementorModel({
-                id: randomId(),
-                elType: 'widget',
-                widgetType: 'html',
-                settings: { html: localComplexNodeHtml(node) },
-                elements: []
-            }, node, parentBox);
-        }
-        if (node.type === 'badge') {
-            return positionElementorModel({
-                id: randomId(),
-                elType: 'widget',
-                widgetType: 'text-editor',
-                settings: { editor: '<span class="page-generator-badge">' + escapeElementorText(node.text || node.content || '') + '</span>' },
-                elements: []
-            }, node, parentBox);
-        }
-        var containerSettings = {
-            flex_direction: settings.direction === 'row' ? 'row' : 'column',
-            content_width: node.inner ? 'boxed' : 'full',
-            boxed_width: { unit: 'px', size: $('#page-generator-modal').data('schema').containerWidth || 1200 },
-            gap: { unit: 'px', size: Number(settings.gap || 0) }
-        };
-        if (hasBackgroundColor) {
-            containerSettings.background_background = 'classic';
-            containerSettings.background_color = backgroundColor;
-        }
-        return positionElementorModel({
-            id: randomId(),
-            elType: 'container',
-            isInner: !!node.inner,
-            settings: containerSettings,
-            elements: children.map(function (child) {
-                return toElementorModel(child, node.bbox || parentBox);
-            })
-        }, node, parentBox);
-    }
-
-    function positionElementorModel(model, node, parentBox) {
-        var box = node.bbox;
-        if (!box || !parentBox || !parentBox.width || !parentBox.height) return model;
-        // Same Elementor 4.x keys as the server serializer (see apply_elementor_geometry): a wrong key is silently ignored.
-        var isContainer = model.elType === 'container';
-        var size = { unit: 'px', sizes: [] };
-        model.settings[isContainer ? 'position' : '_position'] = 'absolute';
-        model.settings._offset_x = $.extend({}, size, { size: Number(box.x || 0) - Number(parentBox.x || 0) });
-        model.settings._offset_y = $.extend({}, size, { size: Number(box.y || 0) - Number(parentBox.y || 0) });
-        var width = $.extend({}, size, { size: Math.max(1, Number(box.width || 0)) });
-        if (isContainer) {
-            model.settings.width = width;
-        } else {
-            model.settings._element_width = 'initial';
-            model.settings._element_custom_width = width;
-        }
-        return model;
-    }
-
-    function escapeElementorText(value) {
-        return String(value || '').replace(/[&<>"']/g, function (character) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character];
-        });
-    }
-
-    function localComplexNodeHtml(node) {
-        if (node.type === 'table') {
-            var rows = (node.rows || []).map(function (row) {
-                return '<tr>' + row.map(function (cell) {
-                    return '<td>' + escapeElementorText(cell.text || cell.content || '') + '</td>';
-                }).join('') + '</tr>';
-            }).join('');
-            return '<table class="page-generator-table"><tbody>' + rows + '</tbody></table>';
-        }
-        var fields = getNodeChildren(node).map(function (field) {
-            var label = escapeElementorText(field.label || field.text || 'Поле');
-            var fieldType = ['email', 'phone', 'date', 'text', 'select', 'textarea', 'checkbox'].indexOf(field.fieldType) !== -1
-                ? field.fieldType : 'text';
-            var type = fieldType === 'phone' ? 'tel' : fieldType;
-            return '<label><span>' + label + '</span><input type="' + escapeElementorText(type) + '" placeholder="' + label + '"></label>';
-        }).join('');
-        return '<form class="page-generator-form">' + fields + '<button type="submit">Надіслати</button></form>';
+        $('#pg-status').text('Підготовка схеми для Elementor...');
+        request('page_generator_elementor_tree', { schema: JSON.stringify(schema) })
+            .done(function (response) {
+                if (!response.success) {
+                    $('#pg-status').text(response.data || 'Не вдалося підготувати схему для Elementor.');
+                    return;
+                }
+                Promise.all(response.data.models.map(function (model) {
+                    return window.$e.run('document/elements/create', { container: root, model: model });
+                })).then(function () {
+                    $('#pg-status').text('Схему вставлено в Elementor.');
+                }).catch(function () {
+                    $('#pg-status').text('Не вдалося вставити схему в Elementor.');
+                });
+            }).fail(function () { $('#pg-status').text('Не вдалося виконати запит для Elementor.'); });
     }
 
     function randomId() {
@@ -1056,6 +905,9 @@
                 box.width <= canvas.width * .92 &&
                 box.height <= canvas.height * .92;
         });
+        filtered.forEach(function (box) {
+            box.photo = window.PageGeneratorDetectors.isPhotographic(pixelData, canvas.width, box);
+        });
         filtered = removeNestedRegions(filtered);
         filtered = mergeNearbyRegions(filtered, canvas);
         return filtered
@@ -1066,6 +918,7 @@
                 box.textLike = box.width < canvas.width * .55 && box.height < canvas.width * .18 && box.variance < 45;
                 box.rounded = estimateRoundedCorners(canvas, box);
                 box.gradient = estimateGradient(canvas, box);
+                box.uniform = edgeUniformity(canvas, box);
                 return box;
             });
     }
@@ -1084,6 +937,8 @@
                     (outer.width > candidate.width * 3 || outer.height > candidate.height * 3)) {
                     return false;
                 }
+                // A photo sitting on a card or banner is content, not an edge artefact; only a photo inside another photo is dropped.
+                if (candidate.photo && !outer.photo) return false;
                 return candidate.x >= outer.x - 2 &&
                     candidate.y >= outer.y - 2 &&
                     candidate.x + candidate.width <= outer.x + outer.width + 2 &&
@@ -1116,6 +971,30 @@
             target.variance = Math.max(target.variance, box.variance);
         });
         return result;
+    }
+
+    // Share of the plate's border pixels that match its dominant colour. Text sits in the middle, so it does not lower this value
+    // the way it lowers whole-region variance (a green button with white text still reads as one plate).
+    function edgeUniformity(canvas, box) {
+        var width = Math.max(1, Math.floor(box.width));
+        var height = Math.max(1, Math.floor(box.height));
+        if (width < 6 || height < 6) return 0;
+        var data = canvas.getContext('2d', { willReadFrequently: true }).getImageData(box.x, box.y, width, height).data;
+        var inset = Math.max(1, Math.min(6, Math.floor(Math.min(width, height) * .12)));
+        var counts = {};
+        var total = 0;
+        var take = function (x, y) {
+            var offset = (y * width + x) * 4;
+            var key = (data[offset] >> 4) + ',' + (data[offset + 1] >> 4) + ',' + (data[offset + 2] >> 4);
+            counts[key] = (counts[key] || 0) + 1;
+            total += 1;
+        };
+        var stepX = Math.max(1, Math.floor(width / 60));
+        var stepY = Math.max(1, Math.floor(height / 40));
+        for (var x = inset; x < width - inset; x += stepX) { take(x, inset); take(x, height - 1 - inset); }
+        for (var y = inset; y < height - inset; y += stepY) { take(inset, y); take(width - 1 - inset, y); }
+        var dominant = Math.max.apply(null, Object.keys(counts).map(function (key) { return counts[key]; }).concat([0]));
+        return total ? dominant / total : 0;
     }
 
     function estimateRoundedCorners(canvas, box) {
@@ -1255,6 +1134,10 @@
             markMenuRuns(textElements, analysis);
             var semantic = analyzeLayout(analysis, textElements);
             semantic.elements = buildRecursiveTree(semantic.elements, analysis);
+            // OCR on a photo returns its scenery as words; the photo itself is the element, so those words are dropped.
+            var photos = collectPhotoBoxes(semantic.elements, []);
+            semantic.elements = pruneTextOnPhotos(semantic.elements, photos);
+            textElements = textElements.filter(function (node) { return !isInsidePhoto(node.bbox, photos); });
             splitIntoSections(analysis, semantic, analysis.data, textElements).forEach(function (section) {
                 sections.push(section);
             });
@@ -1269,6 +1152,37 @@
             hints: hints,
             sections: sections
         };
+    }
+
+    function collectPhotoBoxes(nodes, found) {
+        (nodes || []).forEach(function (node) {
+            if (node.type === 'image' && node.bbox) found.push(node.bbox);
+            collectPhotoBoxes(node.children || [], found);
+        });
+        return found;
+    }
+
+    function isInsidePhoto(box, photos) {
+        if (!box) return false;
+        var centerX = Number(box.x || 0) + Number(box.width || 0) / 2;
+        var centerY = Number(box.y || 0) + Number(box.height || 0) / 2;
+        return photos.some(function (photo) {
+            return centerX >= photo.x && centerX <= photo.x + photo.width && centerY >= photo.y && centerY <= photo.y + photo.height;
+        });
+    }
+
+    function pruneTextOnPhotos(nodes, photos) {
+        return (nodes || []).filter(function (node) {
+            if (['text', 'heading', 'link', 'badge'].indexOf(node.type) !== -1 && isInsidePhoto(node.bbox, photos)) return false;
+            if (node.type === 'image') {
+                node.text = '';
+                node.content = '';
+            }
+            var kept = node.type === 'image' ? [] : pruneTextOnPhotos(node.children || node.elements || [], photos);
+            node.children = kept;
+            node.elements = kept;
+            return true;
+        });
     }
 
     function markMenuRuns(textElements, analysis) {
@@ -1358,8 +1272,17 @@
     }
 
     function splitIntoSections(analysis, semantic, uploadedData, textElements) {
-        var bands = (analysis.sections || []).filter(function (band) { return band.height >= analysis.width * .02; });
-        if (bands.length < 2) bands = deriveContentBands(semantic.elements, analysis);
+        var detected = (analysis.sections || []).filter(function (band) { return band.height >= analysis.width * .02; });
+        // A colour band can hold a whole page body (same background), so each band is also split at its own content gaps.
+        var bands = detected.length < 2 ? deriveContentBands(semantic.elements, analysis) : detected.reduce(function (all, band) {
+            var inside = semantic.elements.filter(function (node) {
+                var box = node.bbox || node.settings || {};
+                var center = (box.y || 0) + (box.height || 0) / 2;
+                return center >= band.y && center < band.y + band.height;
+            });
+            var parts = deriveContentBands(inside, analysis, band);
+            return all.concat(parts.length ? parts : [band]);
+        }, []);
         if (bands.length < 2) bands = [{ y: 0, height: analysis.height, background: semantic.background }];
         var sections = bands.map(function (band, index) {
             var children = semantic.elements.filter(function (node) {
@@ -1424,8 +1347,9 @@
         if (index === 0 && children.length >= 2) return 'header';
         if (index >= total - 2 && total >= 3 && isDarkBackground(band.background)) return 'footer';
         if (inputSurfaces(analysis, band).length >= 2) return 'form-section';
-        if (/таблиц|дата і час|рівень шум|статус/.test(text)) return 'table-section';
-        if (/увага|alert|перевищ/.test(text)) return 'alert-section';
+        // Only table headers and alert titles identify those bands; card labels such as "Рівень шуму" or a "Перевищення" badge do not.
+        if (/таблиц|дата і час/.test(text)) return 'table-section';
+        if (/увага|alert/.test(text)) return 'alert-section';
         return 'section';
     }
 
@@ -2036,7 +1960,7 @@
             return contains && candidate.rounded >= 2 && candidate.width >= box.width * 1.08 &&
                 candidate.width <= box.width * 3.2 &&
                 candidate.height >= box.height * 1.1 && candidate.height <= box.height * 3.5 &&
-                candidate.variance < 55;
+                (candidate.uniform || 0) >= .8;
         }) || null;
     }
 

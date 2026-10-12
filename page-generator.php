@@ -31,6 +31,7 @@ final class Page_Generator_Plugin {
         add_action('wp_ajax_page_generator_create_page', [$this, 'create_page']);
         add_action('wp_ajax_page_generator_compare_page', [$this, 'compare_page']);
         add_action('wp_ajax_page_generator_upload_asset', [$this, 'upload_asset']);
+        add_action('wp_ajax_page_generator_elementor_tree', [$this, 'elementor_tree']);
         add_action('init', [$this, 'register_component_block']);
         add_action('wp_ajax_page_generator_save_settings', [$this, 'save_settings_ajax']);
     }
@@ -911,6 +912,21 @@ final class Page_Generator_Plugin {
             ];
         }
         return $models;
+    }
+
+    // Single source of truth for the Elementor tree: the browser sends the schema and inserts the returned models as-is.
+    public function elementor_tree() {
+        $this->verify_request();
+        $raw_schema = isset($_POST['schema']) ? wp_unslash($_POST['schema']) : '';
+        $schema = json_decode($raw_schema, true);
+        if (!is_array($schema) || empty($schema['sections'])) {
+            wp_send_json_error('Схема сторінки порожня або пошкоджена. Отримано: ' . json_last_error_msg());
+        }
+        $validation_errors = $this->validate_schema($schema);
+        if ($validation_errors) {
+            wp_send_json_error('Схема не пройшла перевірку: ' . implode(' ', $validation_errors));
+        }
+        wp_send_json_success(['models' => $this->serialize_elementor_schema($schema)]);
     }
 
     private function serialize_elementor_node($node, $root = false, $parent_bbox = null) {

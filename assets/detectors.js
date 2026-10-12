@@ -247,7 +247,8 @@
             for (var index = 1; index < ordered.length; index += 1) {
                 var previous = ordered[index - 1];
                 var gap = ordered[index].x - (previous.x + previous.width);
-                if (gap > Math.max(24, ordered[index].height * 1.8)) segments.push([]);
+                // Spaces inside a phrase are ~0.3 × text height; gaps between menu items are larger (≈1.1–1.4 ×), so a single word run is cut there.
+                if (gap > Math.max(24, ordered[index].height * 1.0)) segments.push([]);
                 segments[segments.length - 1].push(ordered[index]);
             }
             segments.forEach(function (segment) {
