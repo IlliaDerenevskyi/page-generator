@@ -157,6 +157,12 @@ trait Page_Generator_Native_Blocks {
             $css .= 'color:' . $text_color . ';';
             $classes['text'] = true;
         }
+        $weight = absint($style['fontWeight'] ?? 0);
+        if ($text && in_array($weight, [500, 600, 700, 800], true)) {
+            // Weight comes from the screenshot (measured per text line); regular text keeps the theme's default.
+            $attrs['typography']['fontWeight'] = (string) $weight;
+            $css .= 'font-weight:' . $weight . ';';
+        }
         if ($fill) {
             $attrs['color']['background'] = $fill;
             $css .= 'background-color:' . $fill . ';';

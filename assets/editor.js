@@ -353,7 +353,7 @@
             $('#pg-status').html('Поточну WordPress Page оновлено як ' + response.data.status + '. Режим: ' + (response.data.outputMode || 'gutenberg') + '. Блоків: ' + (response.data.blockCount || 0) + '. Рендер: ' + response.data.renderLength + ' символів' + (response.data.elementorMode ? ' (native Elementor tree; HTML fallback лише для складних вузлів)' : '') + '.<br>Порівняння screenshot через Playwright...');
             compareRenderedPage(response.data.compareUrl || response.data.viewUrl, schema, postId).then(function (result) {
                 $('#page-generator-modal').data('schema', schema);
-                $('#pg-status').html('Page оновлено.<br><br>Візуальна відповідність: <strong>' + result.visualSimilarity.toFixed(2) + '%</strong><br>Перцептивна відповідність: <strong>' + Number(result.perceptualSimilarity || 0).toFixed(2) + '%</strong><br>Текстова відповідність: <strong>' + result.textSimilarity.toFixed(2) + '%</strong><br>DOM-відповідність: <strong>' + result.domSimilarity.toFixed(2) + '%</strong><br><span class="page-generator-note">Reference: ' + result.referenceSize + ', rendered: ' + result.renderedSize + ', tokens: ' + result.sourceTokenCount + ' → ' + result.renderedTokenCount + ', nodes: ' + result.sourceNodeCount + ' → ' + result.renderedNodeCount + '.</span>' + (result.renderedUrl ? '<br><a href="' + result.renderedUrl + '" target="_blank" rel="noopener">Відкрити rendered screenshot</a>' : '') + (result.diffUrl ? '<br><a href="' + result.diffUrl + '" target="_blank" rel="noopener">Відкрити diff screenshot</a>' : '') + '<br><br>Найбільші розбіжності:<br>' + (result.differences.length ? result.differences.map(function (item) { return '- ' + item; }).join('<br>') : '- не виявлено') + '<br><br><button type="button" id="pg-finish" class="page-generator-button page-generator-button-primary">Готово</button>');
+                $('#pg-status').html('Page оновлено.<br><br>Візуальна відповідність: <strong>' + result.visualSimilarity.toFixed(2) + '%</strong><br>Перцептивна відповідність: <strong>' + Number(result.perceptualSimilarity || 0).toFixed(2) + '%</strong><br>Змістова відповідність: <strong>' + Number(result.contentSimilarity || 0).toFixed(2) + '%</strong>' + (result.worstZone ? ' <span class="page-generator-note">(найгірша зона: колонка ' + (result.worstZone.column + 1) + ', рядок ' + (result.worstZone.row + 1) + ' — ' + Number(result.worstZone.similarity).toFixed(0) + '%)</span>' : '') + '<br>Текстова відповідність: <strong>' + result.textSimilarity.toFixed(2) + '%</strong><br>DOM-відповідність: <strong>' + result.domSimilarity.toFixed(2) + '%</strong><br><span class="page-generator-note">Reference: ' + result.referenceSize + ', rendered: ' + result.renderedSize + ', tokens: ' + result.sourceTokenCount + ' → ' + result.renderedTokenCount + ', nodes: ' + result.sourceNodeCount + ' → ' + result.renderedNodeCount + '.</span>' + (result.renderedUrl ? '<br><a href="' + result.renderedUrl + '" target="_blank" rel="noopener">Відкрити rendered screenshot</a>' : '') + (result.diffUrl ? '<br><a href="' + result.diffUrl + '" target="_blank" rel="noopener">Відкрити diff screenshot</a>' : '') + '<br><br>Найбільші розбіжності:<br>' + (result.differences.length ? result.differences.map(function (item) { return '- ' + item; }).join('<br>') : '- не виявлено') + '<br><br><button type="button" id="pg-finish" class="page-generator-button page-generator-button-primary">Готово</button>');
                 $('#pg-finish').on('click', function () { $('#page-generator-modal').remove(); });
             }).catch(function (error) {
                 var updated = 'Поточну WordPress Page оновлено як ' + response.data.status + '.<br>Screenshot-порівняння не виконано: ' + error.message;
@@ -630,7 +630,14 @@
             $('#pg-schema-json').val(JSON.stringify(schema, null, 2));
             $('#pg-schema-editor').show();
             var nodeStats = getSchemaNodeStats(schema);
-            var warning = nodeStats.unclassified ? '<br><span class="page-generator-warning">Не класифіковано: ' + nodeStats.unclassified + ' регіонів. Це ще не повне дерево.</span>' : '';
+            var resolutionAdvice = [];
+            analyses.forEach(function (item) {
+                window.PageGeneratorDetectors.assessResolution(item.width, item.words).forEach(function (line) {
+                    resolutionAdvice.push((analyses.length > 1 && item.file ? item.file.name + ': ' : '') + line);
+                });
+            });
+            var advice = resolutionAdvice.length ? '<br><span class="page-generator-warning">' + resolutionAdvice.map(function (line) { return $('<div>').text(line).html(); }).join('<br>') + '</span>' : '';
+            var warning = advice + (nodeStats.unclassified ? '<br><span class="page-generator-warning">Не класифіковано: ' + nodeStats.unclassified + ' регіонів. Це ще не повне дерево.</span>' : '');
             $('#pg-status').html('Аналіз завершено по етапах: геометрія → секції → семантика → стилі → assets.<br>OCR-слів: ' + analyses.reduce(function (total, item) { return total + item.words.length; }, 0) + ', нормалізованих областей: ' + analyses.reduce(function (total, item) { return total + item.boxes.length; }, 0) + ', вузлів у дереві: ' + nodeStats.total + ', класифікованих: ' + nodeStats.classified + '.' + warning + '<br><span class="page-generator-note">Таблиця: ' + nodeStats.tables + ', форма: ' + nodeStats.forms + ', кнопки: ' + nodeStats.buttons + ', фото: ' + nodeStats.images + ', невпевнені вузли: ' + nodeStats.lowConfidence + '.</span>');
         }).catch(function (error) {
             $('#pg-status').text('Помилка аналізу: ' + error.message);
@@ -666,9 +673,26 @@
                             return results;
                         });
                     }).then(function (results) {
+                        var found = window.PageGeneratorDetectors.findIcons(pixelData, canvas.width, canvas.height, results[0]);
+                        results[0] = results[0].filter(function (word) { return found.droppedWords.indexOf(word) === -1; });
+                        var iconCandidates = found.icons.filter(function (icon) {
+                            // The blob is the plate itself (a small button or badge), not a picture on it.
+                            var isPlate = surfaces.some(function (surface) {
+                                return ['button', 'badge', 'input'].indexOf(surface.kind) !== -1 && boxOverlapRatio(icon, surface) > .6;
+                            });
+                            return !isPlate && !results[1].boxes.some(function (photo) {
+                                return photo.kind === 'photo-candidate' && photo.width > 150 && photo.height > 150 && centerInside(icon, photo);
+                            });
+                        });
+                        return uploadIconCrops(canvas, iconCandidates).then(function (icons) {
+                            results.icons = icons;
+                            return results;
+                        });
+                    }).then(function (results) {
                         return uploadDetectedCrops(canvas, results[1].boxes).then(function (assets) {
                             results[1].boxes.forEach(function (box, index) { if (assets[index]) box.asset = assets[index]; });
                             resolve({
+                            icons: results.icons || [],
                             file: file,
                             data: uploadedData,
                             width: canvas.width,
@@ -686,6 +710,33 @@
                 image.src = reader.result;
             };
             reader.readAsDataURL(file);
+        });
+    }
+
+    // Icons and logos cut out of the screenshot, uploaded as media assets (capped so a very busy page does not flood the server).
+    function uploadIconCrops(canvas, icons) {
+        var limited = icons.slice(0, 40);
+        return Promise.all(limited.map(function (icon, index) {
+            return new Promise(function (resolve) {
+                var crop = document.createElement('canvas');
+                crop.width = icon.width;
+                crop.height = icon.height;
+                crop.getContext('2d').drawImage(canvas, icon.x, icon.y, icon.width, icon.height, 0, 0, crop.width, crop.height);
+                crop.toBlob(function (blob) {
+                    if (!blob) { resolve(null); return; }
+                    var form = new FormData();
+                    form.append('action', 'page_generator_upload_asset');
+                    form.append('nonce', PageGeneratorConfig.nonce);
+                    form.append('asset', blob, 'detected-icon-' + index + '.png');
+                    $.ajax({ url: PageGeneratorConfig.ajaxUrl, method: 'POST', data: form, processData: false, contentType: false })
+                        .done(function (response) { resolve(response.success ? response.data : null); })
+                        .fail(function () { resolve(null); });
+                }, 'image/png');
+            });
+        })).then(function (assets) {
+            return limited.map(function (icon, index) {
+                return assets[index] ? Object.assign({}, icon, { asset: assets[index] }) : null;
+            }).filter(Boolean);
         });
     }
 
@@ -893,6 +944,7 @@
             source.delete(); gray.delete(); edges.delete(); contours.delete(); hierarchy.delete(); kernel.delete();
             resolve({
                 boxes: boxes,
+                allRegions: boxes.allRegions || boxes,
                 sections: window.PageGeneratorDetectors.detectBands(pixels, canvas.width, canvas.height),
                 colors: Object.keys(colorCounts).sort(function (a, b) { return colorCounts[b] - colorCounts[a]; }).slice(0, 12)
             });
@@ -908,9 +960,14 @@
         filtered.forEach(function (box) {
             box.photo = window.PageGeneratorDetectors.isPhotographic(pixelData, canvas.width, box);
         });
+        // Controls (selects, inputs) sit inside a bigger card, so nested regions are kept aside for control detection.
+        var allRegions = filtered.map(function (box) {
+            box.uniform = edgeUniformity(canvas, box);
+            return box;
+        });
         filtered = removeNestedRegions(filtered);
         filtered = mergeNearbyRegions(filtered, canvas);
-        return filtered
+        var kept = filtered
             .sort(function (a, b) { return (b.width * b.height) - (a.width * a.height); })
             .slice(0, 120)
             .map(function (box) {
@@ -921,6 +978,8 @@
                 box.uniform = edgeUniformity(canvas, box);
                 return box;
             });
+        kept.allRegions = allRegions;
+        return kept;
     }
 
     function removeNestedRegions(boxes) {
@@ -995,6 +1054,141 @@
         for (var y = inset; y < height - inset; y += stepY) { take(inset, y); take(width - 1 - inset, y); }
         var dominant = Math.max.apply(null, Object.keys(counts).map(function (key) { return counts[key]; }).concat([0]));
         return total ? dominant / total : 0;
+    }
+
+    function rgbGap(a, b) {
+        return Math.sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+    }
+
+    function toHex(pixel) {
+        return '#' + pixel.map(function (value) { return Math.round(value).toString(16).padStart(2, '0'); }).join('');
+    }
+
+    // Reads the pixel grid of a small region once; callers index it with (x, y) relative to the region.
+    function readRegion(canvas, x, y, width, height) {
+        // getImageData returns transparent black outside the canvas, so the region is clamped first.
+        var left = Math.max(0, Math.floor(x));
+        var top = Math.max(0, Math.floor(y));
+        var w = Math.max(1, Math.min(canvas.width - left, Math.floor(x + width) - left));
+        var h = Math.max(1, Math.min(canvas.height - top, Math.floor(y + height) - top));
+        var data = canvas.getContext('2d', { willReadFrequently: true }).getImageData(left, top, w, h).data;
+        return {
+            width: w,
+            height: h,
+            at: function (px, py) {
+                var offset = (Math.min(h - 1, Math.max(0, py)) * w + Math.min(w - 1, Math.max(0, px))) * 4;
+                return [data[offset], data[offset + 1], data[offset + 2]];
+            }
+        };
+    }
+
+    // Fill, border and left accent of a card. The card's fill is its interior (not the page behind it). The border is the
+    // first line just inside the detected edge that differs from both the page and the fill; the accent is the saturated bar
+    // at the left edge. Detected edges are often a few pixels off the real line, so the search scans instead of using offsets.
+    function sampleCardEdges(canvas, box) {
+        var edges = {};
+        var midX = Math.round(box.x + box.width / 2);
+        var midY = Math.round(box.y + box.height / 2);
+        var page = readRegion(canvas, midX, box.y - 8, 1, 1).at(0, 0);
+        var inside = readRegion(canvas, midX, box.y + box.height - 10, 1, 1).at(0, 0);
+        edges.background = toHex(inside);
+        var column = readRegion(canvas, midX, box.y - 3, 1, 12);
+        for (var row = 0; row < column.height; row += 1) {
+            var line = column.at(0, row);
+            if (rgbGap(line, page) >= 6 && rgbGap(line, inside) >= 6) {
+                edges.borderColor = toHex(line);
+                edges.borderWidth = 1;
+                break;
+            }
+        }
+        var strip = readRegion(canvas, box.x - 2, midY - 2, 24, 5);
+        var start = -1;
+        var accentWidth = 0;
+        for (var x = 0; x < strip.width; x += 1) {
+            var pixel = strip.at(x, 2);
+            var saturated = Math.max(pixel[0], pixel[1], pixel[2]) - Math.min(pixel[0], pixel[1], pixel[2]) >= 80;
+            if (saturated && rgbGap(pixel, inside) >= 80) {
+                if (start < 0) start = x;
+                accentWidth += 1;
+            } else if (start >= 0) {
+                break;
+            }
+        }
+        if (start >= 0 && accentWidth >= 2 && accentWidth <= 16) {
+            edges.accentColor = toHex(strip.at(start, 2));
+            edges.accentWidth = accentWidth;
+        }
+        return edges;
+    }
+
+    // A checkbox is a small outlined square at the start of its label. OCR boxes can include the square, so the search
+    // starts a little left of the label and takes the first ink blob. Returns the square's box or null.
+    function findCheckboxBeside(canvas, label) {
+        var size = Math.max(14, label.height);
+        var region = readRegion(canvas, label.x - size * .5, label.y - size * .4, size * 3, label.height + size * .8);
+        var background = region.at(0, 0);
+        var inked = function (x, y) { return rgbGap(region.at(x, y), background) >= 30; };
+        var columnHasInk = [];
+        for (var x = 0; x < region.width; x += 1) {
+            var any = false;
+            for (var y = 0; y < region.height && !any; y += 1) any = inked(x, y);
+            columnHasInk.push(any);
+        }
+        var left = columnHasInk.indexOf(true);
+        if (left < 0) return null;
+        var right = left;
+        while (right + 1 < region.width && columnHasInk[right + 1]) right += 1;
+        var top = region.height, bottom = -1;
+        for (var px = left; px <= right; px += 1) {
+            for (var py = 0; py < region.height; py += 1) {
+                if (inked(px, py)) { top = Math.min(top, py); bottom = Math.max(bottom, py); }
+            }
+        }
+        if (bottom < 0) return null;
+        var width = right - left + 1;
+        var height = bottom - top + 1;
+        var ratio = width / height;
+        if (width < size * .6 || height < size * .6 || width > size * 1.6 || ratio < .7 || ratio > 1.4) return null;
+        // A checkbox is a closed outline: all four sides are inked and the inside is the background.
+        var sideRun = function (fixed, from, to, horizontal) {
+            var count = 0;
+            for (var i = from; i <= to; i += 1) {
+                if (horizontal ? inked(i, fixed) : inked(fixed, i)) count += 1;
+            }
+            return count / Math.max(1, to - from + 1);
+        };
+        if (sideRun(top, left, right, true) < .7 || sideRun(bottom, left, right, true) < .7 ||
+            sideRun(left, top, bottom, false) < .7 || sideRun(right, top, bottom, false) < .7) return null;
+        if (rgbGap(region.at(Math.round((left + right) / 2), Math.round((top + bottom) / 2)), background) >= 20) return null;
+        // The whole inside has to be empty, not just its centre pixel: four coloured squares (a Microsoft-style logo) leave a blank cross in the middle.
+        var inset = Math.max(3, Math.round(Math.min(width, height) * .25));
+        var interior = 0;
+        var interiorInked = 0;
+        for (var iy = top + inset; iy <= bottom - inset; iy += 1) {
+            for (var ix = left + inset; ix <= right - inset; ix += 1) {
+                interior += 1;
+                if (inked(ix, iy)) interiorInked += 1;
+            }
+        }
+        if (interior && interiorInked / interior > .1) return null;
+        return { x: Math.round(label.x - size * .5 + left), y: Math.round(label.y - size * .4 + top), width: width, height: height };
+    }
+
+    // A select has a chevron on its right edge: a few dark pixels in a narrow column, not a long text run.
+    function hasChevron(canvas, box) {
+        var region = readRegion(canvas, box.x + box.width - Math.min(44, box.width * .15), box.y + 4, Math.min(44, box.width * .15), Math.max(1, box.height - 8));
+        var background = region.at(0, 0);
+        var ink = 0;
+        var minX = region.width, maxX = -1;
+        for (var y = 0; y < region.height; y += 1) {
+            for (var x = 0; x < region.width; x += 1) {
+                if (rgbGap(region.at(x, y), background) >= 90) {
+                    ink += 1;
+                    minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+                }
+            }
+        }
+        return ink >= 6 && ink <= 400 && maxX >= 0 && maxX - minX <= 24;
     }
 
     function estimateRoundedCorners(canvas, box) {
@@ -1120,6 +1314,7 @@
                     settings: { x: line.x, y: line.y, width: line.width, height: line.height, fontSize: Math.max(10, Math.round(line.height * .9)) },
                     style: {
                         fontSize: Math.max(10, Math.round(line.height * .9)),
+                        fontWeight: fontWeightFromInk(measureInkDensity(analysis.canvas, line)),
                         color: sampleTextColor(analysis.canvas, line, '#334155')
                     },
                     children: [],
@@ -1241,6 +1436,31 @@
         for (var y = y0; y <= y1; y += Math.max(1, Math.floor((y1 - y0) / 12))) { take(x0, y); take(x1, y); }
         var best = Object.keys(counts).sort(function (a, b) { return counts[b].n - counts[a].n; })[0];
         return best ? counts[best].color : [255, 255, 255];
+    }
+
+    // Font weight from the screenshot: how much of the text box is solid ink. Bold glyphs cover noticeably more of the
+    // box than regular ones at the same size, so the density is compared with fixed bands.
+    // Density bands calibrated on the lab6 reference: bold labels ~0.4-0.5, bold headings ~0.3-0.35, regular body ~0.2-0.28.
+    function fontWeightFromInk(density) {
+        if (density >= .42) return 700;
+        if (density >= .3) return 600;
+        return 400;
+    }
+
+    function measureInkDensity(canvas, box) {
+        if (!canvas || !box) return 0;
+        var x = Math.max(0, Math.floor(box.x || 0));
+        var y = Math.max(0, Math.floor(box.y || 0));
+        var width = Math.min(canvas.width - x, Math.max(1, Math.ceil(box.width || 1)));
+        var height = Math.min(canvas.height - y, Math.max(1, Math.ceil(box.height || 1)));
+        if (width <= 1 || height <= 1) return 0;
+        var pixels = canvas.getContext('2d', { willReadFrequently: true }).getImageData(x, y, width, height).data;
+        var background = ringBackground(canvas, box);
+        var ink = 0;
+        for (var index = 0; index < pixels.length; index += 4) {
+            if (colorDistance([pixels[index], pixels[index + 1], pixels[index + 2]], background) >= 120) ink += 1;
+        }
+        return ink / (width * height);
     }
 
     function sampleTextColor(canvas, box, fallback) {
@@ -1402,11 +1622,11 @@
                             gradient: box.gradient,
                             variance: box.variance
                         },
-                        style: {
+                        style: Object.assign({
                             background: sampleRegionColor(analysis, box),
                             borderRadius: box.rounded || 0,
                             gradient: box.gradient
-                        },
+                        }, itemType === 'image' ? {} : sampleCardEdges(analysis.canvas, box)),
                         children: itemChildren,
                         elements: itemChildren,
                         behavior: { type: 'none' },
@@ -1456,10 +1676,10 @@
                 url: box.asset ? box.asset.url : '',
                 bbox: { x: box.x, y: box.y, width: box.width, height: box.height },
                 settings: { x: box.x, y: box.y, width: box.width, height: box.height },
-                style: {
+                style: Object.assign({
                     background: sampleRegionColor(analysis, box),
                     borderRadius: box.rounded || 0
-                },
+                }, visualType === 'image' ? {} : sampleCardEdges(analysis.canvas, box)),
                 children: visualChildren,
                 elements: visualChildren,
                 behavior: { type: 'none' },
@@ -1475,7 +1695,29 @@
         textElements.forEach(function (item) {
             if (!usedText[item.id]) elements.push(item);
         });
+        var iconImages = (analysis.icons || []).map(function (icon) {
+            return {
+                id: randomId(),
+                type: 'image',
+                role: 'icon',
+                asset: icon.asset,
+                url: icon.asset.url,
+                text: '',
+                content: '',
+                bbox: { x: icon.x, y: icon.y, width: icon.width, height: icon.height },
+                settings: { x: icon.x, y: icon.y, width: icon.width, height: icon.height },
+                style: {},
+                children: [],
+                elements: [],
+                behavior: { type: 'none' },
+                confidence: .66,
+                detection: { detectedBy: ['pixel-analysis', 'icon-blob'], manual: false }
+            };
+        });
+        iconImages.forEach(function (node) { elements.push(node); });
         (analysis.boxes || []).filter(function (box) {
+            return !iconImages.some(function (node) { return centerInside(box, node.bbox) || centerInside(node.bbox, box); });
+        }).filter(function (box) {
             return box.width <= analysis.width * .12 && box.height <= analysis.width * .12 &&
                 box.width >= 10 && box.height >= 10 && !textByRegion[analysis.boxes.indexOf(box)].length;
         }).filter(function (box) {
@@ -1499,7 +1741,7 @@
                 role: box.rounded ? 'icon-button' : 'icon',
                 bbox: { x: box.x, y: box.y, width: box.width, height: box.height },
                 settings: { x: box.x, y: box.y, width: box.width, height: box.height },
-                style: { background: box.background || '#ffffff', borderRadius: box.rounded || 0 },
+                style: Object.assign({ background: box.background || '#ffffff', borderRadius: box.rounded || 0 }, box.borderColor ? { borderColor: box.borderColor, borderWidth: 1 } : {}),
                 children: [],
                 elements: [],
                 behavior: { type: box.rounded ? 'click' : 'none' },
@@ -1574,7 +1816,155 @@
         return usable.length >= 2;
     }
 
+    // Controls detectFormFields misses: a checkbox (small square + label) and a lone select (wide field with a chevron).
+    // Their label and placeholder text nodes are absorbed into the control so they are not drawn twice.
+    function findStandaloneControls(analysis, textElements, scope, sectionType) {
+        var nodes = [];
+        var absorbed = {};
+        var inScope = function (item) { return !scope || boxIntersectsScope(item, scope); };
+        var itemOf = function (node) { return node.bbox || node.settings || null; };
+        var textOf = function (node) { return node.text || node.content || ''; };
+        textElements.forEach(function (node) {
+            var item = itemOf(node);
+            if (!textOf(node).trim() || !item || !inScope(item)) return;
+            var check = findCheckboxBeside(analysis.canvas, item);
+            if (!check) return;
+            absorbed[node.id] = true;
+            nodes.push(makeControlNode('checkbox', textOf(node), '', {
+                x: check.x, y: Math.min(check.y, item.y),
+                width: item.x + item.width - check.x, height: Math.max(check.height, item.height)
+            }, '#ffffff'));
+        });
+        (analysis.allRegions || analysis.boxes || []).forEach(function (box) {
+            if (!inScope(box) || box.kind === 'photo-candidate') return;
+            if (box.width < analysis.width * .2 || box.height < 24 || box.height > 90) return;
+            if ((box.uniform || 0) < .8 || !hasChevron(analysis.canvas, box)) return;
+            var inside = textElements.filter(function (node) {
+                var item = itemOf(node);
+                return item && !absorbed[node.id] && centerInside(item, box);
+            });
+            var label = textElements.filter(function (node) {
+                var item = itemOf(node);
+                return item && !absorbed[node.id] && item.y + item.height <= box.y + 4 &&
+                    box.y - (item.y + item.height) < Math.max(35, box.height * 2) &&
+                    Math.abs(item.x - box.x) < Math.max(40, box.width * .25);
+            }).sort(function (a, b) { return (itemOf(b).y + itemOf(b).height) - (itemOf(a).y + itemOf(a).height); })[0];
+            inside.concat(label ? [label] : []).forEach(function (node) { absorbed[node.id] = true; });
+            var fill = readRegion(analysis.canvas, box.x + 4, box.y + box.height / 2 - 2, 4, 4).at(1, 1);
+            nodes.push(makeControlNode('select', label ? textOf(label) : 'Поле', inside.map(textOf).join(' ').trim(), box, toHex(fill)));
+        });
+        if (sectionType !== 'form-section') {
+            findChevronSelects(analysis, textElements, absorbed, inScope).forEach(function (found) {
+                var label = textElements.filter(function (node) {
+                    var item = itemOf(node);
+                    return item && !absorbed[node.id] && item.y + item.height <= found.box.y + 4 &&
+                        found.box.y - (item.y + item.height) < Math.max(35, found.box.height * 2) &&
+                        Math.abs(item.x - found.box.x) < Math.max(40, found.box.width * .25);
+                }).sort(function (a, b) { return (itemOf(b).y + itemOf(b).height) - (itemOf(a).y + itemOf(a).height); })[0];
+                absorbed[found.node.id] = true;
+                if (label) absorbed[label.id] = true;
+                nodes.push(makeControlNode('select', label ? textOf(label) : 'Поле', textOf(found.node).trim(), found.box, found.fill));
+            });
+        }
+        return { nodes: nodes, absorbed: absorbed };
+    }
+
+    // Fallback for a select the region detector did not outline: a text value with a chevron to its right, inside a
+    // bordered field. The field is measured from the text and the chevron, then both vertical borders are checked.
+    function findChevronSelects(analysis, textElements, absorbed, inScope) {
+        var canvas = analysis.canvas;
+        var found = [];
+        var itemOf = function (node) { return node.bbox || node.settings || null; };
+        textElements.forEach(function (node) {
+            var item = itemOf(node);
+            if (!item || absorbed[node.id] || !(node.text || node.content || '').trim() || !inScope(item)) return;
+            if (item.width > analysis.width * .5) return;
+            var height = Math.round(Math.max(item.height * 2.6, 40));
+            var top = Math.round(item.y + item.height / 2 - height / 2);
+            var scan = readRegion(canvas, item.x + item.width + 4, top, analysis.width * .6, height);
+            var background = scan.at(0, 0);
+            var inkColumn = function (x) {
+                var count = 0;
+                for (var y = 0; y < scan.height; y += 1) if (rgbGap(scan.at(x, y), background) >= 90) count += 1;
+                return count;
+            };
+            var chevronLeft = -1;
+            for (var x = 0; x < scan.width && chevronLeft < 0; x += 1) {
+                var inked = inkColumn(x);
+                if (inked >= 3 && inked <= 40) chevronLeft = x;
+            }
+            if (chevronLeft < 0) return;
+            var chevronRight = chevronLeft;
+            while (chevronRight + 1 < scan.width && chevronRight - chevronLeft < 24 && inkColumn(chevronRight + 1) > 0) chevronRight += 1;
+            if (chevronRight - chevronLeft > 20) return;
+            var fieldLeft = Math.round(item.x - 31);
+            var borderLine = function (x) {
+                var column = readRegion(canvas, x - 1, top, 3, height);
+                var lined = 0;
+                for (var y = 0; y < column.height; y += 1) {
+                    if (rgbGap(column.at(1, y), column.at(0, y)) >= 8 || rgbGap(column.at(1, y), column.at(2, y)) >= 8) lined += 1;
+                }
+                return lined / Math.max(1, column.height) >= .6;
+            };
+            // The right edge is estimated from the chevron, so the real line is searched for close to that estimate.
+            var estimatedRight = Math.round(item.x + item.width + 4 + chevronRight + 14);
+            var fieldRight = -1;
+            for (var offset = 0; offset <= 10 && fieldRight < 0; offset += 1) {
+                if (borderLine(estimatedRight - offset)) fieldRight = estimatedRight - offset;
+                else if (offset && borderLine(estimatedRight + offset)) fieldRight = estimatedRight + offset;
+            }
+            if (fieldRight < 0 || !borderLine(fieldLeft)) return;
+            var fill = readRegion(canvas, fieldLeft + 6, top + height - 8, 4, 4).at(1, 1);
+            found.push({ node: node, box: { x: fieldLeft, y: top, width: fieldRight - fieldLeft, height: height }, fill: toHex(fill) });
+        });
+        return found;
+    }
+
+    function makeControlNode(fieldType, label, placeholder, bbox, background) {
+        return {
+            id: randomId(),
+            type: 'form-field',
+            fieldType: fieldType,
+            role: 'form-field',
+            label: label,
+            placeholder: placeholder,
+            labelBox: null,
+            children: [],
+            elements: [],
+            bbox: { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height },
+            settings: { x: bbox.x, y: bbox.y, width: bbox.width, height: bbox.height },
+            style: { background: background, borderRadius: 0 },
+            behavior: { type: 'input' },
+            confidence: .7,
+            detection: { detectedBy: ['opencv', 'control-geometry'], manual: false }
+        };
+    }
+
     function classifyStructuredContent(elements, textElements, analysis, sectionType, scope) {
+        var controls = findStandaloneControls(analysis, textElements, scope, sectionType);
+        if (!controls.nodes.length) return classifyStructuredContentBase(elements, textElements, analysis, sectionType, scope);
+        // Text inside a control is the control's value. The same OCR word can also sit inside a card of this band, so the
+        // prune runs through the whole subtree and matches by position as well as by id.
+        var textTypes = ['text', 'heading', 'link', 'badge'];
+        var insideControl = function (node) {
+            var item = node.bbox || node.settings;
+            return item && textTypes.indexOf(node.type) !== -1 && controls.nodes.some(function (control) { return centerInside(item, control.bbox); });
+        };
+        var prune = function (nodes) {
+            return (nodes || []).filter(function (node) {
+                if (controls.absorbed[node.id] || insideControl(node)) return false;
+                var shared = node.elements === node.children;
+                if (node.children) node.children = prune(node.children);
+                if (node.elements) node.elements = shared ? node.children : prune(node.elements);
+                return true;
+            });
+        };
+        var rest = prune(elements);
+        var restText = textElements.filter(function (node) { return !controls.absorbed[node.id] && !insideControl(node); });
+        return classifyStructuredContentBase(rest, restText, analysis, sectionType, scope).concat(controls.nodes);
+    }
+
+    function classifyStructuredContentBase(elements, textElements, analysis, sectionType, scope) {
         var formFields = detectFormFields(analysis, textElements, scope);
         var tableEvidence = detectTableEvidence(analysis, textElements, scope);
         var hasVisualComponents = elements.some(function (node) {
@@ -1586,6 +1976,15 @@
         if (formFields.length >= 2 && sectionType === 'form-section') {
             var withForm = buildFormInElements(elements, formFields);
             if (withForm) return withForm;
+        }
+        if (formFields.length === 1 && formFields[0].detection.detectedBy.indexOf('outlined-field') !== -1) {
+            var field = formFields[0].bbox;
+            var submit = collectByType(elements, 'button', []).some(function (button) {
+                var box = nodeBox(button);
+                return box.y >= field.y + field.height - 4 && box.y - (field.y + field.height) <= field.height * 3 &&
+                    box.x < field.x + field.width && box.x + box.width > field.x;
+            });
+            if (submit) return buildFormInElements(elements, formFields, true);
         }
         if (tableEvidence.isTable && !hasVisualComponents && textNodeCount >= 3) {
             return [makeTableNode(elements, .76)];
@@ -1651,7 +2050,7 @@
     }
 
     // The form replaces only what lies inside its own box; headings and descriptions around it are kept.
-    function buildFormInElements(elements, fields) {
+    function buildFormInElements(elements, fields, keepLoose) {
         var fieldsBox = groupBoundingBox(fields.map(function (field) { return field.bbox; }));
         var wrapper = null;
         elements.forEach(function (node) {
@@ -1673,7 +2072,19 @@
             fields.forEach(function (field) { if (field.labelBox) all.push(field.labelBox); });
             formBox = groupBoundingBox(all);
         }
-        var children = fields.concat(buttons).sort(function (a, b) { return nodeBox(a).y - nodeBox(b).y; });
+        var children = fields.concat(buttons);
+        if (keepLoose) {
+            // Hints and other text inside the form that is neither a field's placeholder nor its label stay with the form instead of vanishing.
+            elements.forEach(function (node) {
+                var box = nodeBox(node);
+                var consumed = node === wrapper || buttons.indexOf(node) !== -1 || node.type === 'card' ||
+                    fields.some(function (field) {
+                        return centerInside(box, field.bbox) || (field.labelBox && centerInside(box, field.labelBox));
+                    });
+                if (!consumed && centerInside(box, formBox)) children.push(node);
+            });
+        }
+        children.sort(function (a, b) { return nodeBox(a).y - nodeBox(b).y; });
         var form = makeStructuredNode('form', 'form', children, .72);
         form.bbox = formBox;
         form.settings = { x: formBox.x, y: formBox.y, width: formBox.width, height: formBox.height };
@@ -1692,6 +2103,21 @@
         });
     }
 
+    function loneOutlinedFields(analysis, textElements, scope) {
+        return (analysis.surfaces || []).filter(function (surface) {
+            if (!surface.outlined || surface.kind === 'input' || (scope && !boxIntersectsScope(surface, scope))) return false;
+            var inside = textElements.filter(function (node) {
+                return centerInside(node.bbox || node.settings || { x: 0, y: 0, width: 0, height: 0 }, surface);
+            });
+            if (inside.length !== 1) return false;
+            var box = inside[0].bbox || inside[0].settings;
+            var centre = box.x + box.width / 2;
+            return box.x - surface.x <= Math.max(surface.height, analysis.width * .03) && centre < surface.x + surface.width * .5;
+        }).map(function (surface) {
+            return Object.assign({}, surface, { lone: true });
+        });
+    }
+
     function detectFormFields(analysis, textElements, scope) {
         var surfaceFields = inputSurfaces(analysis, scope);
         var candidates = surfaceFields.length >= 2 ? surfaceFields : (analysis.boxes || []).filter(function (box) {
@@ -1704,13 +2130,24 @@
                 ratio <= 18 &&
                 box.variance < 45;
         });
+        // A box whose centre sits on a button plate is that button, not a field (a button under a field is aligned with it in the same column).
+        var buttonPlates = (analysis.surfaces || []).filter(function (surface) { return surface.kind === 'button'; });
+        candidates = candidates.filter(function (candidate) {
+            return !buttonPlates.some(function (plate) { return centerInside(candidate, plate); });
+        });
         var aligned = candidates.filter(function (candidate) {
             return candidates.some(function (other) {
                 var gapLimit = Math.max(24, candidate.height * 2.5);
+                if (candidate.tall && other !== candidate) return other.y < candidate.y + candidate.height && other.y + other.height > candidate.y;
                 return other !== candidate &&
                     Math.abs(other.x - candidate.x) <= Math.max(16, candidate.width * .12) &&
                     (Math.abs((other.y + other.height) - candidate.y) <= gapLimit || Math.abs((candidate.y + candidate.height) - other.y) <= gapLimit);
             });
+        });
+        // A single outlined field has no sibling to confirm it, so it needs its own evidence: a thin line on all four sides, and exactly one
+        // line of text inside that starts at the left (a centred line is a button, not a field).
+        loneOutlinedFields(analysis, textElements, scope).forEach(function (surface) {
+            if (!aligned.some(function (box) { return Math.abs(box.x - surface.x) < 8 && Math.abs(box.y - surface.y) < 8; })) aligned.push(surface);
         });
         return aligned.map(function (box) {
             var labelNode = textElements.filter(function (node) {
@@ -1742,7 +2179,7 @@
                 style: { background: box.background || '#ffffff', borderRadius: box.rounded || 0 },
                 behavior: { type: 'input' },
                 confidence: .74,
-                detection: { detectedBy: ['opencv', 'alignment-analysis'], manual: false }
+                detection: { detectedBy: box.lone ? ['surface-geometry', 'outlined-field'] : ['opencv', 'alignment-analysis'], manual: false }
             };
         });
     }
@@ -1877,7 +2314,9 @@
             node.type = 'button';
             node.role = 'primary-action';
             node.behavior = { type: 'unknown' };
-            node.style.background = normalizeHexColor(buttonBox.background || '#ffffff');
+            // The region pass reports a white fill for buttons, so the plate colour is read from its inside, clear of the label.
+            var plateFill = toHex(readRegion(analysis.canvas, buttonBox.x + Math.round(buttonBox.width * .08), buttonBox.y + Math.round(buttonBox.height / 2), 4, 4).at(1, 1));
+            node.style.background = normalizeHexColor(plateFill || '#ffffff');
             node.style.borderRadius = buttonBox.rounded || 0;
             fitNodeToPlate(node, buttonBox);
             node.detection = {

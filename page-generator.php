@@ -791,7 +791,7 @@ final class Page_Generator_Plugin {
         $first_section = !empty($schema['sections'][0]) && is_array($schema['sections'][0]) ? $schema['sections'][0] : [];
         $width = absint($first_section['settings']['sourceWidth'] ?? 0);
         $height = absint($first_section['settings']['sourceHeight'] ?? 0);
-        $canvas_style = 'position:relative;width:100%;max-width:' . absint($this->settings()['default_container_width']) . 'px;margin:0 auto;font-family:Arial,sans-serif;color:#334155;';
+        $canvas_style = 'position:relative;container-type:inline-size;width:100%;max-width:' . absint($this->settings()['default_container_width']) . 'px;margin:0 auto;font-family:Arial,sans-serif;color:#334155;';
         if ($width && $height) {
             $canvas_style .= 'aspect-ratio:' . $width . '/' . $height . ';overflow:hidden;';
         }
@@ -1133,12 +1133,15 @@ final class Page_Generator_Plugin {
             $placeholder = $node['placeholder'] ?? '';
             $field_type = in_array($node['fieldType'] ?? '', ['email', 'phone', 'date', 'text', 'select', 'textarea', 'checkbox'], true) ? $node['fieldType'] : 'text';
             $height = !empty($node['bbox']['height']) ? max(20, absint($node['bbox']['height'])) : 0;
-            $control_style = 'width:100%;box-sizing:border-box;margin:0;padding:0 12px;' . ($height ? 'min-height:' . $height . 'px;' : '') . $this->render_surface_style($node) . 'border:1px solid #d5dde6;';
-            $wrapper = '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="display:flex;flex-direction:column;gap:8px;">';
+            // Controls are placed by their own box like every other node; without it they fall into the flow and drift.
+            $position = $dimensions && !empty($node['bbox']) ? $this->render_box_position_style($node, $dimensions) : '';
             if ($field_type === 'checkbox') {
-                return '<label class="page-generator-block page-generator-form-field"' . $block_attrs . '><input type="checkbox"> ' . esc_html($label) . '</label>';
+                return '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr($position . 'display:flex;align-items:center;gap:8px;') . '"><input type="checkbox"> ' . esc_html($label) . '</label>';
             }
-            $caption = $label !== '' && $label !== 'Поле' ? '<span>' . esc_html($label) . '</span>' : '';
+            $control_style = 'width:100%;box-sizing:border-box;margin:0;padding:0 12px;' . ($position ? 'height:100%;' : ($height ? 'min-height:' . $height . 'px;' : '')) . $this->render_surface_style($node) . 'border:1px solid #d5dde6;';
+            $wrapper = '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr(($position ?: 'position:relative;') . 'display:flex;flex-direction:column;margin:0;') . '">';
+            // The caption sits above the control, outside the control's own box.
+            $caption = $label !== '' && $label !== 'Поле' ? '<span style="position:absolute;left:0;bottom:100%;margin-bottom:6px;white-space:nowrap;">' . esc_html($label) . '</span>' : '';
             if ($field_type === 'select') {
                 return $wrapper . $caption . '<select style="' . esc_attr($control_style) . '"><option>' . esc_html($placeholder) . '</option></select></label>';
             }
@@ -1156,16 +1159,26 @@ final class Page_Generator_Plugin {
             }
             $form_style .= $this->render_surface_style(['style' => array_intersect_key($node_style, ['background' => 1, 'borderRadius' => 1])]);
             $has_submit = false;
+            // Children carry canvas coordinates, so they are placed relative to the form's own box, which is its containing block.
+            $form_dims = $dimensions && !empty($node['bbox']) ? [
+                'width' => max(1, (float) ($node['bbox']['width'] ?? 1)),
+                'height' => max(1, (float) ($node['bbox']['height'] ?? 1)),
+                'offsetX' => (float) ($node['bbox']['x'] ?? 0),
+                'offsetY' => (float) ($node['bbox']['y'] ?? 0),
+                // cqw is relative to the whole canvas, so text inside the form is still sized against the page width.
+                'fontWidth' => (float) ($dimensions['fontWidth'] ?? $dimensions['width'] ?? 0),
+            ] : null;
             if ($inner_html !== null) {
                 $fields = $inner_html;
             } else foreach ($children_nodes as $child) {
                 if (($child['type'] ?? '') === 'button') {
                     $has_submit = true;
-                    $button_style = $this->render_surface_style($child) . 'min-height:' . max(36, absint($child['bbox']['height'] ?? 0)) . 'px;border:0;cursor:pointer;width:100%;font-size:' . max(10, absint($child['style']['fontSize'] ?? 16)) . 'px;';
+                    $button_position = $form_dims && !empty($child['bbox']) ? $this->render_box_position_style($child, $form_dims) : 'width:100%;';
+                    $button_style = $button_position . $this->render_surface_style($child) . 'min-height:' . max(36, absint($child['bbox']['height'] ?? 0)) . 'px;border:0;cursor:pointer;white-space:nowrap;font-size:' . $this->font_size_css(absint($child['style']['fontSize'] ?? 16), $dimensions) . ';';
                     $fields .= "\n" . '<button type="submit" class="page-generator-block page-generator-button-node" style="' . esc_attr($button_style) . '">' . esc_html($child['text'] ?? ($child['content'] ?? '')) . '</button>';
                     continue;
                 }
-                $fields .= "\n" . $this->render_node($child, null);
+                $fields .= "\n" . $this->render_node($child, $form_dims);
             }
             if (!$has_submit && $inner_html === null) {
                 $fields .= "\n" . '<button type="submit" class="page-generator-button-node">Надіслати</button>';
@@ -1293,7 +1306,15 @@ final class Page_Generator_Plugin {
         $left = $this->clamp_percent(((float) $x - (float) ($dimensions['offsetX'] ?? 0)) / $width * 100);
         $top = $this->clamp_percent(((float) $y - (float) ($dimensions['offsetY'] ?? 0)) / $height * 100);
         $node_width = $this->clamp_percent((float) $node_width_value / $width * 100, 1, 100);
-        return 'position:absolute;left:' . $left . '%;top:' . $top . '%;width:' . max(1, $node_width) . '%;margin:0;font-size:' . max(10, absint($font_size)) . 'px;line-height:1.2;white-space:nowrap;';
+        return 'position:absolute;left:' . $left . '%;top:' . $top . '%;width:' . max(1, $node_width) . '%;margin:0;font-size:' . $this->font_size_css($font_size, $dimensions) . ';line-height:1.2;white-space:nowrap;';
+    }
+
+    // Font sizes come from the screenshot in source pixels and scale with the canvas, like positions do.
+    private function font_size_css($font_size, $dimensions) {
+        $source_width = (float) ($dimensions['fontWidth'] ?? $dimensions['width'] ?? 0);
+        if ($source_width <= 0) return max(10, absint($font_size)) . 'px';
+        $scaled = round(max(1, (float) $font_size) / $source_width * 100, 4);
+        return 'max(10px,' . $scaled . 'cqw)';
     }
 
     private function render_box_position_style($node, $dimensions, $root_section = false) {

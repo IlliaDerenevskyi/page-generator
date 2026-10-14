@@ -9,7 +9,8 @@
     aspect-ratio: var(--pg-w) / var(--pg-h);
     overflow: hidden;
     box-sizing: border-box;
-    padding: 0;
+    /* cqw is measured on the content box, so any theme padding (Astra pads .entry-content > .wp-block-group) would shrink every block. */
+    padding: 0 !important;
     --pg-k: calc(100cqw / var(--pg-w));
 }
 .page-generator-canvas .pg-abs {

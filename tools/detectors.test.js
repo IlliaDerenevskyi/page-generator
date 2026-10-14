@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -187,4 +187,102 @@ test('merging OCR passes keeps the more confident reading of the same word and a
         [{ text: 'Services', x: 11, y: 10, width: 60, height: 14, confidence: 88 }, { text: 'Contact', x: 10, y: 80, width: 60, height: 14, confidence: 70 }]
     ]);
     assert.deepEqual(merged.map((word) => word.text), ['Services', 'Work', 'Contact']);
+});
+
+test('assessResolution advises on narrow, tiny-text and empty inputs', () => {
+    const words = (height) => Array.from({ length: 5 }, () => ({ height }));
+    assert.deepEqual(assessResolution(1440, words(20)), []);
+    assert.equal(assessResolution(600, words(20)).length, 1);
+    assert.match(assessResolution(1440, words(6))[0], /дрібний/);
+    assert.match(assessResolution(1440, [])[0], /не розпізнано/);
+    assert.match(assessResolution(5000, words(20))[0], /великий/);
+});
+
+test('a button whose gradient stops the flood fill halfway is still a button', () => {
+    const width = 400;
+    const height = 200;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const paint = (y0, y1, [r, g, b]) => {
+        for (let y = y0; y < y1; y += 1) {
+            for (let x = 50; x < 350; x += 1) {
+                const index = (y * width + x) * 4;
+                data[index] = r;
+                data[index + 1] = g;
+                data[index + 2] = b;
+            }
+        }
+    };
+    paint(50, 62, [35, 130, 225]);
+    paint(62, 70, [28, 118, 210]);
+    const surfaces = classifySurfaces(detectSurfaces(data, width, height), width, data, height);
+    const plate = surfaces.find((surface) => surface.y === 50);
+    assert.ok(plate, 'the upper part of the button is detected as a surface');
+    assert.equal(plate.kind, 'button');
+});
+
+test('detectOutline finds a thin border around a white field on a white page and ignores a bare white area', () => {
+    const width = 400;
+    const height = 200;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const line = [233, 232, 230];
+    for (let x = 49; x <= 350; x += 1) {
+        [49, 90].forEach((y) => data.set([...line, 255], (y * width + x) * 4));
+    }
+    for (let y = 49; y <= 90; y += 1) {
+        [49, 350].forEach((x) => data.set([...line, 255], (y * width + x) * 4));
+    }
+    const field = { x: 50, y: 50, width: 300, height: 40, fill: [255, 255, 255] };
+    assert.ok(detectOutline(field, data, width, height));
+    assert.equal(detectOutline(field, data, width, height).color, '#e9e8e6');
+    assert.equal(detectOutline({ x: 50, y: 140, width: 300, height: 40, fill: [255, 255, 255] }, data, width, height), null);
+});
+
+function iconPage() {
+    const width = 400;
+    const height = 300;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const paint = (x0, y0, x1, y1, [r, g, b]) => {
+        for (let y = y0; y < y1; y += 1) {
+            for (let x = x0; x < x1; x += 1) data.set([r, g, b, 255], (y * width + x) * 4);
+        }
+    };
+    const ring = (x0, y0, size, colour) => {
+        paint(x0, y0, x0 + size, y0 + size, colour);
+        paint(x0 + 4, y0 + 4, x0 + size - 4, y0 + size - 4, [255, 255, 255]);
+    };
+    return { width, height, data, paint, ring };
+}
+
+test('detectIconBlobs finds small graphics and ignores words and oversized areas', () => {
+    const { width, height, data, paint, ring } = iconPage();
+    ring(50, 50, 18, [30, 30, 30]);
+    ring(200, 50, 18, [30, 30, 30]);
+    paint(40, 150, 360, 290, [30, 30, 30]);
+    const blobs = detectIconBlobs(data, width, height, [{ x: 200, y: 50, width: 18, height: 18 }]);
+    assert.equal(blobs.length, 1);
+    assert.deepEqual([blobs[0].x, blobs[0].y, blobs[0].width, blobs[0].height], [50, 50, 18, 18]);
+});
+
+test('findIcons drops a single junk character on a picture but keeps short real words as text', () => {
+    const { width, height, data, ring } = iconPage();
+    ring(50, 50, 18, [30, 30, 30]);
+    ring(200, 50, 18, [30, 30, 30]);
+    const junk = { text: '@', x: 50, y: 50, width: 18, height: 18 };
+    const real = { text: 'in', x: 200, y: 50, width: 18, height: 18 };
+    const found = findIcons(data, width, height, [junk, real]);
+    assert.equal(found.icons.length, 1);
+    assert.equal(found.icons[0].x, 50);
+    assert.deepEqual(found.droppedWords, [junk]);
+});
+
+test('isColourful needs saturation over much of the area, so anti-aliasing fringes on text do not count', () => {
+    const { width, data, paint } = iconPage();
+    paint(50, 50, 68, 68, [30, 30, 30]);
+    [[50, 50, [220, 40, 40]], [51, 50, [40, 40, 220]], [52, 50, [40, 200, 40]], [53, 50, [230, 190, 20]]].forEach(([x, y, c]) => data.set([...c, 255], (y * width + x) * 4));
+    assert.equal(isColourful(data, width, { x: 50, y: 50, width: 18, height: 18 }), false);
+    paint(120, 50, 129, 59, [220, 40, 40]);
+    paint(129, 50, 138, 59, [40, 200, 40]);
+    paint(120, 59, 129, 68, [40, 80, 230]);
+    paint(129, 59, 138, 68, [230, 190, 20]);
+    assert.equal(isColourful(data, width, { x: 120, y: 50, width: 18, height: 18 }), true);
 });

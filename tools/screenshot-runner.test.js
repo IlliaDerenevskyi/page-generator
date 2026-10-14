@@ -78,3 +78,44 @@ test('comparison target must be HTTP(S) on the configured host without credentia
     assert.equal(isAllowedTarget('file:///etc/passwd', 'example.com'), false);
     assert.equal(isAllowedTarget('https://user:pass@example.com/page', 'example.com'), false);
 });
+
+const { PNG } = require('pngjs');
+const { contentSimilarity, worstZone } = require('./screenshot-runner');
+
+function solid(width, height, colour, rects = []) {
+    const image = new PNG({ width, height });
+    const paint = (x0, y0, x1, y1, [r, g, b]) => {
+        for (let y = y0; y < y1; y += 1) {
+            for (let x = x0; x < x1; x += 1) {
+                const index = (y * width + x) * 4;
+                image.data[index] = r;
+                image.data[index + 1] = g;
+                image.data[index + 2] = b;
+                image.data[index + 3] = 255;
+            }
+        }
+    };
+    paint(0, 0, width, height, colour);
+    rects.forEach((rect) => paint(...rect));
+    return image;
+}
+
+test('contentSimilarity ignores empty background, so a white page cannot score high by being white', () => {
+    const blue = [20, 90, 220];
+    const reference = solid(400, 800, [255, 255, 255], [[40, 40, 360, 120, blue]]);
+    const blank = solid(400, 800, [255, 255, 255]);
+    assert.equal(contentSimilarity(reference, reference).similarity, 1);
+    assert.equal(contentSimilarity(reference, blank).similarity, 0);
+    assert.equal(contentSimilarity(blank, blank).similarity, 1);
+});
+
+test('contentSimilarity reports the weakest zone of the page', () => {
+    const blue = [20, 90, 220];
+    const reference = solid(400, 800, [255, 255, 255], [[0, 40, 400, 120, blue], [0, 440, 400, 520, blue]]);
+    const rendered = solid(400, 800, [255, 255, 255], [[0, 40, 400, 120, blue]]);
+    const { zones } = contentSimilarity(reference, rendered);
+    const worst = worstZone(zones);
+    assert.equal(worst.row, 1);
+    assert.equal(worst.similarity, 0);
+    assert.equal(zones.cells[0], 100);
+});

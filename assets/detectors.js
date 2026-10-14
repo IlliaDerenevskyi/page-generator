@@ -99,14 +99,21 @@
             samples.push([data[offset], data[offset + 1], data[offset + 2]]);
         };
         var step = Math.max(1, Math.floor((surface.width + surface.height) / 80));
+        var sides = [[], [], [], []];
+        var sampleSide = function (side, x, y) {
+            var before = samples.length;
+            sample(x, y);
+            if (samples.length > before) sides[side].push(samples[samples.length - 1]);
+        };
         for (var x = surface.x; x < surface.x + surface.width; x += step) {
-            sample(x, surface.y - gap);
-            sample(x, surface.y + surface.height + gap - 1);
+            sampleSide(0, x, surface.y - gap);
+            sampleSide(1, x, surface.y + surface.height + gap - 1);
         }
         for (var y = surface.y; y < surface.y + surface.height; y += step) {
-            sample(surface.x - gap, y);
-            sample(surface.x + surface.width + gap - 1, y);
+            sampleSide(2, surface.x - gap, y);
+            sampleSide(3, surface.x + surface.width + gap - 1, y);
         }
+        samples.sides = sides;
         return samples;
     }
 
@@ -121,9 +128,203 @@
     // Share of pixels just outside the box that match the surrounding surface (separates real plates from photo patches).
     function surroundMatch(samples, fill) {
         if (!samples.length) return 0;
-        return samples.filter(function (color) {
-            return Math.abs(color[0] - fill[0]) + Math.abs(color[1] - fill[1]) + Math.abs(color[2] - fill[2]) <= 36;
-        }).length / samples.length;
+        var share = function (list) {
+            return list.length ? list.filter(function (color) {
+                return Math.abs(color[0] - fill[0]) + Math.abs(color[1] - fill[1]) + Math.abs(color[2] - fill[2]) <= 36;
+            }).length / list.length : 0;
+        };
+        var overall = share(samples);
+        // A plate with a gradient is only flood-filled part of the way, so one edge can still touch the plate itself; three clean sides are enough.
+        var cleanSides = (samples.sides || []).filter(function (side) { return share(side) >= .85; }).length;
+        return cleanSides >= 3 ? Math.max(overall, .6) : overall;
+    }
+
+    // A thin line around a flat surface: the fill alone cannot tell a white field on a white page from empty space. Each side is scanned a few
+    // pixels outward at several points; the line is real when most points on every side hold a pixel clearly different from the fill.
+    function detectOutline(surface, data, width, height) {
+        var fill = surface.fill;
+        var reach = 4;
+        var positions = [.2, .35, .5, .65, .8];
+        var sides = [
+            { dx: 0, dy: -1, along: 'x', base: surface.y, span: surface.width, start: surface.x },
+            { dx: 0, dy: 1, along: 'x', base: surface.y + surface.height - 1, span: surface.width, start: surface.x },
+            { dx: -1, dy: 0, along: 'y', base: surface.x, span: surface.height, start: surface.y },
+            { dx: 1, dy: 0, along: 'y', base: surface.x + surface.width - 1, span: surface.height, start: surface.y }
+        ];
+        var lines = [];
+        for (var sideIndex = 0; sideIndex < sides.length; sideIndex += 1) {
+            var side = sides[sideIndex];
+            var hits = 0;
+            positions.forEach(function (position) {
+                var along = side.start + Math.round(side.span * position);
+                var best = null;
+                var bestStep = 0;
+                for (var offset = 1; offset <= reach; offset += 1) {
+                    var x = side.along === 'x' ? along : side.base + side.dx * offset;
+                    var y = side.along === 'x' ? side.base + side.dy * offset : along;
+                    if (x < 0 || y < 0 || x >= width || y >= height) continue;
+                    var index = (y * width + x) * 4;
+                    var pixel = [data[index], data[index + 1], data[index + 2]];
+                    var step = Math.abs(pixel[0] - fill[0]) + Math.abs(pixel[1] - fill[1]) + Math.abs(pixel[2] - fill[2]);
+                    if (step > bestStep) { bestStep = step; best = pixel; }
+                }
+                if (best && bestStep >= 9) { hits += 1; lines.push({ side: sideIndex, step: bestStep, pixel: best }); }
+            });
+            if (hits < 4) return null;
+        }
+        var darkest = lines.reduce(function (winner, line) { return line.step > winner.step ? line : winner; }, lines[0]);
+        return { color: hex(darkest.pixel), step: darkest.step };
+    }
+
+    // Small graphics (icons, logos, avatars): connected clusters of pixels that differ from the local background. The background of each tile is its
+    // commonest colour; tiles that are mostly ink are photos or illustrations and are left to the photo detector. Anything that falls inside a word box
+    // (`skip`) is text and is ignored, so only the non-letter shapes remain.
+    function detectIconBlobs(data, width, height, skip, options) {
+        var opts = options || {};
+        var tile = opts.tile || 48;
+        var inkDistance = opts.inkDistance || 60;
+        var minSize = opts.minSize || Math.max(12, Math.round(width * .005));
+        var maxSize = opts.maxSize || Math.round(width * .05);
+        var join = opts.join || Math.max(2, Math.round(width * .0012));
+        var cols = Math.ceil(width / tile);
+        var rows = Math.ceil(height / tile);
+        var background = new Uint8Array(cols * rows * 3);
+        var mostlyInk = new Uint8Array(cols * rows);
+        for (var ty = 0; ty < rows; ty += 1) {
+            for (var tx = 0; tx < cols; tx += 1) {
+                var counts = {};
+                var bestKey = null;
+                var best = 0;
+                var total = 0;
+                var yEnd = Math.min(height, (ty + 1) * tile);
+                var xEnd = Math.min(width, (tx + 1) * tile);
+                for (var y = ty * tile; y < yEnd; y += 2) {
+                    for (var x = tx * tile; x < xEnd; x += 2) {
+                        var o = (y * width + x) * 4;
+                        var key = ((data[o] >> 3) << 10) | ((data[o + 1] >> 3) << 5) | (data[o + 2] >> 3);
+                        var count = (counts[key] || 0) + 1;
+                        counts[key] = count;
+                        total += 1;
+                        if (count > best) { best = count; bestKey = key; }
+                    }
+                }
+                var cell = (ty * cols + tx) * 3;
+                background[cell] = ((bestKey >> 10) << 3) + 4;
+                background[cell + 1] = (((bestKey >> 5) & 31) << 3) + 4;
+                background[cell + 2] = ((bestKey & 31) << 3) + 4;
+                mostlyInk[ty * cols + tx] = best / total < .25 ? 1 : 0;
+            }
+        }
+        var mask = new Uint8Array(width * height);
+        for (var py = 0; py < height; py += 1) {
+            for (var px = 0; px < width; px += 1) {
+                var tileIndex = Math.floor(py / tile) * cols + Math.floor(px / tile);
+                if (mostlyInk[tileIndex]) continue;
+                var cellOffset = tileIndex * 3;
+                var pixel = (py * width + px) * 4;
+                if (Math.abs(data[pixel] - background[cellOffset]) + Math.abs(data[pixel + 1] - background[cellOffset + 1]) + Math.abs(data[pixel + 2] - background[cellOffset + 2]) > inkDistance) mask[py * width + px] = 1;
+            }
+        }
+        (skip || []).forEach(function (box) {
+            var x0 = Math.max(0, box.x - 2);
+            var y0 = Math.max(0, box.y - 2);
+            var x1 = Math.min(width, box.x + box.width + 2);
+            var y1 = Math.min(height, box.y + box.height + 2);
+            for (var sy = y0; sy < y1; sy += 1) {
+                for (var sx = x0; sx < x1; sx += 1) mask[sy * width + sx] = 0;
+            }
+        });
+        // Close small gaps so one icon made of several strokes is a single component.
+        var closed = new Uint8Array(width * height);
+        for (var cy = 0; cy < height; cy += 1) {
+            for (var cx = 0; cx < width; cx += 1) {
+                if (!mask[cy * width + cx]) continue;
+                var ya = Math.max(0, cy - join), yb = Math.min(height - 1, cy + join);
+                var xa = Math.max(0, cx - join), xb = Math.min(width - 1, cx + join);
+                for (var dy = ya; dy <= yb; dy += 1) {
+                    for (var dx = xa; dx <= xb; dx += 1) closed[dy * width + dx] = 1;
+                }
+            }
+        }
+        var seen = new Uint8Array(width * height);
+        var stack = new Int32Array(width * height);
+        var blobs = [];
+        for (var start = 0; start < closed.length; start += 1) {
+            if (!closed[start] || seen[start]) continue;
+            var top = 0;
+            var minX = width, maxX = 0, minY = height, maxY = 0, ink = 0;
+            stack[top++] = start;
+            seen[start] = 1;
+            while (top) {
+                var index = stack[--top];
+                var bx = index % width;
+                var by = (index - bx) / width;
+                if (mask[index]) ink += 1;
+                if (bx < minX) minX = bx;
+                if (bx > maxX) maxX = bx;
+                if (by < minY) minY = by;
+                if (by > maxY) maxY = by;
+                if (bx > 0 && closed[index - 1] && !seen[index - 1]) { seen[index - 1] = 1; stack[top++] = index - 1; }
+                if (bx < width - 1 && closed[index + 1] && !seen[index + 1]) { seen[index + 1] = 1; stack[top++] = index + 1; }
+                if (by > 0 && closed[index - width] && !seen[index - width]) { seen[index - width] = 1; stack[top++] = index - width; }
+                if (by < height - 1 && closed[index + width] && !seen[index + width]) { seen[index + width] = 1; stack[top++] = index + width; }
+            }
+            var w = maxX - minX + 1 - join * 2;
+            var h = maxY - minY + 1 - join * 2;
+            if (w < minSize || h < minSize || w > maxSize || h > maxSize) continue;
+            var ratio = w / h;
+            if (ratio < .4 || ratio > 2.5) continue;
+            var fillShare = ink / (w * h);
+            if (fillShare < .08 || fillShare > .985) continue;
+            blobs.push({ x: minX + join, y: minY + join, width: w, height: h, ink: ink, fillShare: fillShare });
+        }
+        return blobs;
+    }
+
+    // Several distinct hues among the saturated pixels: a multi-colour logo, never a line of text.
+    function isColourful(data, width, blob) {
+        var buckets = new Array(12).fill(0);
+        var saturated = 0;
+        for (var y = blob.y; y < blob.y + blob.height; y += 1) {
+            for (var x = blob.x; x < blob.x + blob.width; x += 1) {
+                var o = (y * width + x) * 4;
+                var r = data[o], g = data[o + 1], b = data[o + 2];
+                var max = Math.max(r, g, b), min = Math.min(r, g, b);
+                if (max - min < 80) continue;
+                var hue = max === r ? ((g - b) / (max - min) + 6) % 6 : max === g ? (b - r) / (max - min) + 2 : (r - g) / (max - min) + 4;
+                buckets[Math.min(11, Math.floor(hue * 2))] += 1;
+                saturated += 1;
+            }
+        }
+        // Sub-pixel anti-aliasing puts red and blue fringes on ordinary text; a real multi-colour logo is saturated over much of its area.
+        if (saturated < 20 || saturated < blob.width * blob.height * .3) return false;
+        return buckets.filter(function (count) { return count >= saturated * .1; }).length >= 3;
+    }
+
+    // Icons that are not text. Only words longer than three characters protect their pixels; short ones are judged per picture. OCR reads pictures as junk
+    // "words" ("[", "@", a lone "G"): one character lying on a picture, or up to three characters lying on a multi-colour logo, is dropped and the picture kept.
+    // A short word that is real text ("in", "to", "US") owns its glyphs, so that cluster is not an icon.
+    function findIcons(data, width, height, words) {
+        var overlap = function (inner, outer) {
+            var w = Math.min(inner.x + inner.width, outer.x + outer.width) - Math.max(inner.x, outer.x);
+            var h = Math.min(inner.y + inner.height, outer.y + outer.height) - Math.max(inner.y, outer.y);
+            return w > 0 && h > 0 ? (w * h) / (inner.width * inner.height) : 0;
+        };
+        var length = function (word) { return String(word.text || '').trim().length; };
+        var shortWords = words.filter(function (word) { return length(word) <= 3; });
+        var longWords = words.filter(function (word) { return length(word) > 3; });
+        var icons = [];
+        var droppedWords = [];
+        detectIconBlobs(data, width, height, longWords).forEach(function (blob) {
+            var covered = shortWords.filter(function (word) { return overlap(word, blob) >= .4 || overlap(blob, word) >= .6; });
+            if (!covered.length) { icons.push(blob); return; }
+            var colourful = isColourful(data, width, blob);
+            var junk = covered.every(function (word) { return length(word) <= 1 || colourful; });
+            if (!junk) return;
+            icons.push(blob);
+            covered.forEach(function (word) { droppedWords.push(word); });
+        });
+        return { icons: icons, droppedWords: droppedWords };
     }
 
     // Geometry and colour only; nothing here reads text. Sizes are relative to page width (screenshots may be 2x).
@@ -138,16 +339,25 @@
             var ratio = surface.width / surface.height;
             var around = data ? surroundMatch(samples, parentFill) : 1;
             surface.kind = 'surface';
+            if (data && contrast < 3 && ratio >= 3 && surface.height >= unit * 2.5 && surface.height <= unit * 6 && surface.width >= unit * 12) {
+                var outline = detectOutline(surface, data, pageWidth, height);
+                if (outline) { surface.outlined = true; surface.borderColor = outline.color; }
+            }
             if (around < .6) return;
             if (surface.height >= unit * 1.1 && surface.height <= unit * 4.2 && surface.width <= unit * 22 && ratio >= 1.8 &&
                 contrast >= 12 && surface.rounded && surface.width * surface.height <= unit * unit * 70) {
                 surface.kind = 'badge';
-            } else if (surface.height >= unit * 2.3 && surface.height <= unit * 9 && surface.width >= unit * 6 && ratio >= 1.8 &&
+            } else if (surface.height >= unit * 1.6 && surface.height <= unit * 9 && surface.width >= unit * 6 && ratio >= 1.8 &&
                 contrast >= 70 && saturation(surface.fill) >= 60) {
                 surface.kind = 'button';
             } else if (surface.height >= unit * 2.5 && surface.height <= unit * 24 && surface.width >= unit * 12 && ratio >= 3 &&
                 contrast >= 3 && contrast < 60 && parent && luminance(parentFill) >= 230) {
                 surface.kind = 'input-candidate';
+            } else if (surface.height >= unit * 6 && surface.height <= unit * 14 && surface.width >= unit * 12 && ratio >= 1.8 && ratio < 3 &&
+                contrast >= 3 && contrast < 60 && parent && luminance(parentFill) >= 230) {
+                // A textarea is taller than a field and is trusted by its row, not by a column of siblings.
+                surface.kind = 'input-candidate';
+                surface.tall = true;
             } else if (surface.height >= unit * 5 && surface.width >= unit * 25 && luminance(surface.fill) >= 235 && colorStep >= 9) {
                 surface.kind = 'card';
             }
@@ -156,8 +366,9 @@
         surfaces.forEach(function (surface) {
             if (surface.kind !== 'input-candidate') return;
             var siblings = surfaces.filter(function (other) {
-                return other !== surface && other.kind === 'input-candidate' && other.parent === surface.parent &&
-                    Math.abs(other.x - surface.x) <= unit && Math.abs(other.width - surface.width) <= unit;
+                if (other === surface || other.kind !== 'input-candidate' || other.parent !== surface.parent) return false;
+                if (surface.tall) return other.y < surface.y + surface.height && other.y + other.height > surface.y;
+                return Math.abs(other.x - surface.x) <= unit && Math.abs(other.width - surface.width) <= unit;
             });
             if (!siblings.length) surface.kind = 'surface';
         });
@@ -609,7 +820,25 @@
         return kept.sort(function (a, b) { return a.y - b.y || a.x - b.x; });
     }
 
+    // Advice for the user, judged from the screenshot width and the median height of the recognised words.
+    // Returns an empty list when the input is fine.
+    function assessResolution(width, words) {
+        var advice = [];
+        var heights = (words || []).map(function (word) { return word.height; }).filter(function (value) { return value > 0; }).sort(function (a, b) { return a - b; });
+        var median = heights.length ? heights[Math.floor(heights.length / 2)] : 0;
+        if (width < 900) advice.push('Скріншот вузький (' + width + ' px): дрібні елементи можуть не розпізнатися. Зніміть сторінку ширше, бажано від 1280 px.');
+        if (median && median < 9) advice.push('Текст дуже дрібний (медіанна висота слова ' + median + ' px): збільште масштаб сторінки в браузері або зробіть скріншот у 2x.');
+        if (width > 4000) advice.push('Скріншот дуже великий (' + width + ' px): аналіз буде повільним, достатньо 1440–2000 px.');
+        if (!heights.length) advice.push('Текст на скріншоті не розпізнано: перевірте, що це не порожнє або розмите зображення.');
+        return advice;
+    }
+
     return {
+        assessResolution: assessResolution,
+        detectOutline: detectOutline,
+        detectIconBlobs: detectIconBlobs,
+        findIcons: findIcons,
+        isColourful: isColourful,
         detectSurfaces: detectSurfaces,
         classifySurfaces: classifySurfaces,
         detectLineRuns: detectLineRuns,
