@@ -93,3 +93,53 @@
 .page-generator-canvas .elementor-widget:not(:last-child) {
     margin-block-end: 0;
 }
+
+/* WPForms embedded by the form export: fields take the colours measured on the screenshot. */
+.page-generator-canvas .pg-wpforms {
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 14px;
+}
+.page-generator-canvas .pg-wpforms .wpforms-container,
+.page-generator-canvas .pg-wpforms .wpforms-form {
+    margin: 0;
+    padding: 0;
+}
+.page-generator-canvas .pg-wpforms .wpforms-field {
+    padding: 0 0 10px;
+}
+.page-generator-canvas .pg-wpforms .wpforms-field-label {
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+.page-generator-canvas .pg-wpforms input[type=text],
+.page-generator-canvas .pg-wpforms input[type=email],
+.page-generator-canvas .pg-wpforms input[type=tel],
+.page-generator-canvas .pg-wpforms input[type=number],
+.page-generator-canvas .pg-wpforms select,
+.page-generator-canvas .pg-wpforms textarea {
+    max-width: 100%;
+    background: var(--pg-field-bg, #f4f8fb);
+    border: 0;
+    border-radius: var(--pg-field-radius, 6px);
+    box-shadow: none;
+    height: 32px;
+    min-height: 0;
+    padding: 4px 10px;
+    font-size: 13px;
+}
+.page-generator-canvas .pg-wpforms textarea {
+    height: 96px;
+}
+.page-generator-canvas .pg-wpforms .wpforms-submit-container {
+    padding: 0;
+}
+.page-generator-canvas .pg-wpforms div.wpforms-container-full .wpforms-form .wpforms-submit-container button[type=submit].wpforms-submit {
+    background: var(--pg-btn-bg, #1f8f4e);
+    color: var(--pg-btn-color, #fff);
+    border: 0;
+    border-radius: var(--pg-btn-radius, 6px);
+    font-weight: 700;
+    cursor: pointer;
+}

@@ -301,6 +301,11 @@ trait Page_Generator_Native_Blocks {
                 }
                 break;
             case 'form':
+                if ($this->wpforms_node_active($node)) {
+                    $embed = $this->native_block('core/html', [], '', $this->wpforms_embed_html($node), '');
+                    return $this->native_group_block($node, $origin, [$embed], true);
+                }
+                // no break: forms without a WPForms counterpart use the built-in renderer.
             case 'form-field':
                 return $this->serialize_component_block($node, [
                     'width' => max(1, (float) ($parent_box['width'] ?? 1)),

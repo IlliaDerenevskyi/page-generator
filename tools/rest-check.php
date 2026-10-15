@@ -32,4 +32,23 @@ foreach (['elementor' => 'models', 'blocks' => 'content', 'html' => 'content'] a
     $check("export $target", $res->get_status() === 200 && !empty($res->get_data()[$key]));
 }
 $check('unknown export target gives 400', $call('GET', "/page-generator/v1/pages/$post/export", null, ['target' => 'pdf'])->get_status() === 400);
+
+// WPForms export: one form per detected form, reused on the next build instead of piling up duplicates.
+if (post_type_exists('wpforms')) {
+    $has_form = false;
+    $scan = function ($nodes) use (&$scan, &$has_form) { foreach ((array) $nodes as $n) { if (is_array($n) && ($n['type'] ?? '') === 'form') $has_form = true; if (is_array($n)) $scan($n['children'] ?? ($n['elements'] ?? [])); } };
+    $scan($schema['sections'] ?? []);
+    if ($has_form) {
+        $ids = function () use ($post) { $m = get_post_meta($post, '_page_generator_wpforms', true); return is_array($m) ? $m : []; };
+        $check('forms=wpforms builds a WPForms form', $call('PUT', $route, ['schema' => $schema, 'forms' => 'wpforms'])->get_status() === 200 && count($ids()) >= 1);
+        $first = $ids();
+        $check('the page embeds the form shortcode', strpos(get_post($post)->post_content, '[wpforms id="' . ($first[0] ?? 0) . '"]') !== false);
+        $call('PUT', $route, ['schema' => $schema, 'forms' => 'wpforms']);
+        $check('a rebuild reuses the same form', $ids() === $first);
+        $call('PUT', $route, ['schema' => $schema, 'forms' => 'custom']);
+        $check('forms=custom brings back the built-in form', strpos(get_post($post)->post_content, '[wpforms') === false);
+    } else {
+        echo "skip WPForms checks: the page has no form\n";
+    }
+}
 exit($failed ? 1 : 0);

@@ -9,9 +9,11 @@
 defined('ABSPATH') || exit;
 
 require_once __DIR__ . '/includes/native-blocks.php';
+require_once __DIR__ . '/includes/wpforms-export.php';
 
 final class Page_Generator_Plugin {
     use Page_Generator_Native_Blocks;
+    use Page_Generator_WPForms_Export;
 
     const VERSION = '3.4.2';
     const OPTION = 'page_generator_settings';
@@ -97,6 +99,7 @@ final class Page_Generator_Plugin {
             'max_upload_size_mb' => 20,
             'default_container_width' => 1200,
             'keep_import_json' => 1,
+            'use_wpforms' => 0,
         ];
     }
 
@@ -117,6 +120,7 @@ final class Page_Generator_Plugin {
             'max_upload_size_mb' => $this->settings()['max_upload_size_mb'],
             'default_container_width' => absint($_POST['defaultContainerWidth'] ?? 1200),
             'keep_import_json' => $this->settings()['keep_import_json'],
+            'use_wpforms' => $this->settings()['use_wpforms'],
         ];
         $saved = $this->sanitize_settings($input);
         update_option(self::OPTION, $saved);
@@ -148,6 +152,7 @@ final class Page_Generator_Plugin {
         $settings['max_upload_size_mb'] = max(1, min(100, absint($input['max_upload_size_mb'] ?? 20)));
         $settings['default_container_width'] = max(320, min(2400, absint($input['default_container_width'] ?? 1200)));
         $settings['keep_import_json'] = empty($input['keep_import_json']) ? 0 : 1;
+        $settings['use_wpforms'] = empty($input['use_wpforms']) ? 0 : 1;
 
         if ($settings['figma_token'] !== $current['figma_token']) {
             $settings['figma_token_created_at'] = time();
@@ -187,6 +192,7 @@ final class Page_Generator_Plugin {
                     <table class="form-table">
                         <tr><th>Статус сторінки</th><td>Після імпорту статус поточної сторінки не змінюється.</td></tr>
                         <tr><th>Ширина контейнера</th><td><input type="number" min="320" max="2400" name="<?php echo esc_attr(self::OPTION); ?>[default_container_width]" value="<?php echo esc_attr($settings['default_container_width']); ?>"> px</td></tr>
+                        <tr><th>Форми через WPForms</th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION); ?>[use_wpforms]" value="1" <?php checked($settings['use_wpforms'], 1); disabled(!$this->wpforms_available()); ?>> Створювати справжню форму WPForms замість власної розмітки</label><?php if (!$this->wpforms_available()) echo ' <em>(WPForms не встановлено)</em>'; ?></td></tr>
                         <tr><th>Зберігати JSON імпорту</th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION); ?>[keep_import_json]" value="1" <?php checked($settings['keep_import_json'], 1); ?>> Так</label></td></tr>
                     </table>
                 </div>
@@ -344,7 +350,8 @@ final class Page_Generator_Plugin {
             $schema,
             isset($body['title']) ? sanitize_text_field($body['title']) : '',
             isset($body['editorMode']) ? sanitize_key($body['editorMode']) : '',
-            true
+            true,
+            isset($body['forms']) ? sanitize_key($body['forms']) : ''
         );
         if (is_wp_error($result)) {
             $result->add_data(['status' => 500]);
@@ -358,6 +365,7 @@ final class Page_Generator_Plugin {
         if (!$schema) {
             return new WP_Error('page_generator_no_schema', 'Для цієї сторінки немає збереженої схеми.', ['status' => 404]);
         }
+        $this->wpforms_enabled = $this->wpforms_wanted('');
         $target = $request['target'];
         if ($target === 'elementor') return ['target' => $target, 'models' => $this->serialize_elementor_schema($schema)];
         if ($target === 'blocks') return ['target' => $target, 'content' => $this->render_block_content($schema)];
@@ -658,7 +666,9 @@ final class Page_Generator_Plugin {
             $post_id,
             $schema,
             isset($_POST['title']) ? sanitize_text_field(wp_unslash($_POST['title'])) : '',
-            sanitize_key(wp_unslash($_POST['editorMode'] ?? ''))
+            sanitize_key(wp_unslash($_POST['editorMode'] ?? '')),
+            false,
+            sanitize_key(wp_unslash($_POST['forms'] ?? ''))
         );
         if (is_wp_error($result)) {
             wp_send_json_error($result->get_error_message());
@@ -668,7 +678,11 @@ final class Page_Generator_Plugin {
 
     // Writes a validated schema into a page through every exporter (blocks, Elementor tree) and returns a summary, or a WP_Error.
     // Shared by the editor's AJAX save and the REST PUT so both produce identical pages.
-    private function apply_schema($post_id, $schema, $raw_title, $requested_editor_mode, $always_store = false) {
+    private function apply_schema($post_id, $schema, $raw_title, $requested_editor_mode, $always_store = false, $forms_mode = '') {
+        $this->wpforms_enabled = $this->wpforms_wanted($forms_mode);
+        if ($this->wpforms_enabled) {
+            $schema = $this->attach_wpforms($schema, $post_id);
+        }
         $post_before_update = get_post($post_id);
         $title = $post_before_update ? $post_before_update->post_title : '';
         if (in_array(trim($title), ['Imported screenshot page', 'Imported page'], true)) {
@@ -1107,6 +1121,10 @@ final class Page_Generator_Plugin {
                 return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'image', 'settings' => ['image' => ['url' => esc_url_raw($icon_url), 'id' => absint($node['attachmentId'] ?? ($asset['id'] ?? 0))]], 'elements' => []], $node, $parent_bbox);
             }
             return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'container', 'isInner' => true, 'settings' => $this->elementor_plate_settings($style, $node, 'row'), 'elements' => []], $node, $parent_bbox);
+        }
+        if ($type === 'form' && $this->wpforms_node_active($node)) {
+            // [wpforms] is expanded by the text-editor widget (the HTML widget would print it as is).
+            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => ['editor' => $this->wpforms_embed_html($node), '_margin' => $this->elementor_box_values(0), '_padding' => $this->elementor_box_values(0)], 'elements' => []], $node, $parent_bbox);
         }
         if ($type === 'form' || $type === 'form-field' || $type === 'table') {
             $html = $this->render_node($node);
