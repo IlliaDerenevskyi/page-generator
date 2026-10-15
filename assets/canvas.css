@@ -157,12 +157,218 @@
 
 /* A page with a desktop and a mobile layout carries both canvases; the one for the current width is shown (767px = Elementor's mobile). */
 @media (max-width: 767px) {
-    .page-generator-canvas.pg-bp-desktop {
+    .pg-bp-desktop {
         display: none !important;
     }
 }
 @media (min-width: 768px) {
-    .page-generator-canvas.pg-bp-mobile {
+    .pg-bp-mobile {
         display: none !important;
+    }
+}
+
+/* ---- Flow layout (layout mode "flow") ------------------------------------------------------------------------------------
+   Lengths are source pixels in custom properties. --pg-vk is one source pixel on the current screen (1px at the source width or
+   wider, smaller below it), so spacing and type shrink with the screen, but never below a readable floor. */
+.pg-flow-page {
+    --pg-vk: min(1px, calc(100vw / var(--pg-w, 1200)));
+    width: 100%;
+    max-width: calc(var(--pg-w, 1200) * 1px);
+    margin-left: auto;
+    margin-right: auto;
+    box-sizing: border-box;
+    padding: 0 !important;
+    overflow-x: hidden;
+}
+.pg-flow {
+    /* Custom properties inherit; a block that does not set one itself must not pick up its parent's value. */
+    --pg-mh: 0;
+    --pg-pt: 0;
+    --pg-pr: 0;
+    --pg-pb: 0;
+    --pg-pl: 0;
+    --pg-mt: 0;
+    --pg-g: 0;
+    --pg-b: 0;
+    --pg-bp: 0;
+    --pg-gs: 0;
+    box-sizing: border-box;
+    max-width: 100%;
+    margin-top: max(min(calc(var(--pg-mt, 0) * 1px), 8px), calc(var(--pg-mt, 0) * var(--pg-vk, 1px)));
+    margin-bottom: 0;
+}
+.pg-flow.pg-fc {
+    display: flex;
+    flex-direction: var(--pg-d, column);
+    column-gap: max(min(calc(var(--pg-g, 0) * 1px), 8px), calc(var(--pg-g, 0) * var(--pg-vk, 1px)));
+    row-gap: 8px;
+    padding-top: max(min(calc(var(--pg-pt, 0) * 1px), 8px), calc(var(--pg-pt, 0) * var(--pg-vk, 1px)));
+    padding-right: max(min(calc(var(--pg-pr, 0) * 1px), 12px), calc(var(--pg-pr, 0) * var(--pg-vk, 1px)));
+    padding-bottom: max(min(calc(var(--pg-pb, 0) * 1px), 8px), calc(var(--pg-pb, 0) * var(--pg-vk, 1px)));
+    padding-left: max(min(calc(var(--pg-pl, 0) * 1px), 12px), calc(var(--pg-pl, 0) * var(--pg-vk, 1px)));
+    min-height: calc(var(--pg-mh, 0) * var(--pg-vk, 1px));
+}
+.pg-flow.pg-fc.pg-wrap {
+    flex-wrap: wrap;
+}
+.pg-flow.pg-fc.pg-jb {
+    justify-content: space-between;
+}
+.pg-flow.pg-fc.pg-ai-c {
+    align-items: center;
+}
+.pg-flow.pg-fc > .pg-flow {
+    margin-top: 0;
+}
+.pg-flow.pg-fc:not(.pg-wrap) > .pg-flow[style*="--pg-mt"] {
+    margin-top: max(min(calc(var(--pg-mt, 0) * 1px), 8px), calc(var(--pg-mt, 0) * var(--pg-vk, 1px)));
+}
+.pg-flow.pg-fc.pg-wrap > .pg-flow {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+/* Items of a row keep their share of the row; they wrap below their own (unscaled) width, so cards stack on a phone. */
+.pg-flow.pg-fc.pg-wrap > .pg-flow[style*="--pg-bp"] {
+    flex: 0 1 calc(var(--pg-bp, 0) * 1% - var(--pg-gs, 0) * var(--pg-vk, 1px));
+    min-width: min(100%, calc(var(--pg-b, 0) * 0.6px));
+}
+.pg-flow.pg-fc.pg-wrap > .pg-flow.pg-grow {
+    flex-grow: 1;
+}
+.pg-flow.pg-fill {
+    width: 100%;
+}
+.pg-flow.pg-mc {
+    margin-left: auto;
+    margin-right: auto;
+}
+.pg-flow.pg-mr {
+    margin-left: auto;
+}
+.pg-flow[style*="--pg-ml"] {
+    margin-left: calc(var(--pg-ml, 0) * var(--pg-vk, 1px));
+}
+.pg-flow.pg-ft {
+    margin-bottom: 0;
+    font-size: max(min(calc(var(--pg-fs, 14) * 1px), 14px), calc(var(--pg-fs, 14) * var(--pg-vk, 1px)));
+    line-height: 1.3;
+    overflow-wrap: break-word;
+}
+.pg-flow.pg-fm {
+    width: calc(var(--pg-iw, 0) * var(--pg-vk, 1px));
+    max-width: 100%;
+    aspect-ratio: var(--pg-iw, 1) / var(--pg-ih, 1);
+    height: auto;
+}
+.pg-flow.pg-fm {
+    align-self: flex-start;
+}
+.pg-flow.pg-fm img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+}
+.pg-flow.pg-fm.wp-block-image {
+    margin-left: 0;
+    margin-right: 0;
+}
+.pg-flow.wp-block-buttons .wp-block-button__link {
+    white-space: nowrap;
+    font-size: max(min(calc(var(--pg-fs, 14) * 1px), 14px), calc(var(--pg-fs, 14) * var(--pg-vk, 1px)));
+    padding: .55em 1.1em;
+}
+.pg-flow.pg-badge {
+    display: inline-flex;
+    align-self: flex-start;
+    padding: .15em .6em;
+}
+.pg-flow.pg-island {
+    width: 100%;
+}
+
+/* On a phone small source text would be unreadable: body text gets a 14px floor and larger type grows more slowly than on desktop. */
+@media (max-width: 767px) {
+    .pg-flow.pg-ft {
+        font-size: calc(14px + max(0, var(--pg-fs, 14) - 14) * 0.6px);
+    }
+    .pg-flow.wp-block-buttons .wp-block-button__link {
+        font-size: calc(14px + max(0, var(--pg-fs, 14) - 14) * 0.6px);
+    }
+}
+
+.pg-flow.pg-nw {
+    white-space: nowrap;
+}
+/* Table rows: every row shares one column template, so the columns line up. */
+.pg-flow.pg-fg {
+    display: grid;
+    grid-template-columns: var(--pg-cols, 1fr);
+    align-items: center;
+    column-gap: 0;
+}
+.pg-flow.pg-fg > .pg-flow {
+    min-width: 0;
+    margin-top: 0;
+}
+.pg-flow.pg-sx {
+    overflow-x: auto;
+}
+/* A table never squeezes below 60% of its source width; narrower screens scroll it sideways instead. */
+.pg-flow.pg-sx > .pg-fg {
+    min-width: calc(var(--pg-tw, 0) * 0.6px);
+}
+
+/* A form inside a flow page stacks its fields, so each caption sits above its own control instead of floating over the previous one. */
+.pg-flow-page .page-generator-form-field > span,
+.pg-el-flow .page-generator-form-field > span {
+    position: static !important;
+    margin: 0 0 4px !important;
+    font-size: 13px;
+    font-weight: 600;
+}
+.pg-flow-page .page-generator-form,
+.pg-el-flow .page-generator-form {
+    gap: 14px !important;
+}
+
+/* Elementor flow pages: widgets carry no spacing of their own, and a short one-line label never breaks. */
+.pg-el-flow .pg-nowrap,
+.pg-el-flow .pg-nowrap * {
+    white-space: nowrap;
+}
+.pg-el-flow .elementor-widget {
+    margin-block-end: 0;
+}
+.pg-el-flow .elementor-widget-container p,
+.pg-el-flow .elementor-heading-title {
+    margin: 0;
+}
+/* A flex item never grows past its parent just because its content cannot wrap (tables scroll inside their own container). */
+.pg-el-flow,
+.pg-el-flow .e-con,
+.pg-el-flow .elementor-widget {
+    min-width: 0;
+    max-width: 100%;
+}
+@media (max-width: 767px) {
+    /* On a phone even a short label may wrap between words rather than push the page sideways. */
+    .pg-el-flow .pg-nowrap,
+    .pg-el-flow .pg-nowrap * {
+        white-space: normal;
+    }
+}
+.pg-el-flow {
+    overflow-x: clip;
+}
+/* A table row keeps its own width on a phone (set in the container settings); the table container scrolls. */
+.pg-el-flow .e-con.pg-el-trow {
+    max-width: none;
+    flex-shrink: 0;
+}
+@media (max-width: 767px) {
+    .pg-el-flow .e-con.pg-el-trow {
+        min-width: 560px;
     }
 }

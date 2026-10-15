@@ -10,10 +10,14 @@ defined('ABSPATH') || exit;
 
 require_once __DIR__ . '/includes/native-blocks.php';
 require_once __DIR__ . '/includes/wpforms-export.php';
+require_once __DIR__ . '/includes/flow-layout.php';
+require_once __DIR__ . '/includes/flow-elementor.php';
 
 final class Page_Generator_Plugin {
     use Page_Generator_Native_Blocks;
     use Page_Generator_WPForms_Export;
+    use Page_Generator_Flow_Layout;
+    use Page_Generator_Flow_Elementor;
 
     const VERSION = '3.4.2';
     const OPTION = 'page_generator_settings';
@@ -100,6 +104,7 @@ final class Page_Generator_Plugin {
             'default_container_width' => 1200,
             'keep_import_json' => 1,
             'use_wpforms' => 0,
+            'layout_mode' => 'pixel',
         ];
     }
 
@@ -121,6 +126,7 @@ final class Page_Generator_Plugin {
             'default_container_width' => absint($_POST['defaultContainerWidth'] ?? 1200),
             'keep_import_json' => $this->settings()['keep_import_json'],
             'use_wpforms' => $this->settings()['use_wpforms'],
+            'layout_mode' => $this->settings()['layout_mode'],
         ];
         $saved = $this->sanitize_settings($input);
         update_option(self::OPTION, $saved);
@@ -153,6 +159,7 @@ final class Page_Generator_Plugin {
         $settings['default_container_width'] = max(320, min(2400, absint($input['default_container_width'] ?? 1200)));
         $settings['keep_import_json'] = empty($input['keep_import_json']) ? 0 : 1;
         $settings['use_wpforms'] = empty($input['use_wpforms']) ? 0 : 1;
+        $settings['layout_mode'] = ($input['layout_mode'] ?? '') === 'flow' ? 'flow' : 'pixel';
 
         if ($settings['figma_token'] !== $current['figma_token']) {
             $settings['figma_token_created_at'] = time();
@@ -192,6 +199,7 @@ final class Page_Generator_Plugin {
                     <table class="form-table">
                         <tr><th>Статус сторінки</th><td>Після імпорту статус поточної сторінки не змінюється.</td></tr>
                         <tr><th>Ширина контейнера</th><td><input type="number" min="320" max="2400" name="<?php echo esc_attr(self::OPTION); ?>[default_container_width]" value="<?php echo esc_attr($settings['default_container_width']); ?>"> px</td></tr>
+                        <tr><th>Режим розкладки</th><td><select name="<?php echo esc_attr(self::OPTION); ?>[layout_mode]"><option value="pixel" <?php selected($settings['layout_mode'], 'pixel'); ?>>Піксельний (точна копія, масштабується)</option><option value="flow" <?php selected($settings['layout_mode'], 'flow'); ?>>Flow (адаптивна розкладка, блоки переносяться)</option></select></td></tr>
                         <tr><th>Форми через WPForms</th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION); ?>[use_wpforms]" value="1" <?php checked($settings['use_wpforms'], 1); disabled(!$this->wpforms_available()); ?>> Створювати справжню форму WPForms замість власної розмітки</label><?php if (!$this->wpforms_available()) echo ' <em>(WPForms не встановлено)</em>'; ?></td></tr>
                         <tr><th>Зберігати JSON імпорту</th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION); ?>[keep_import_json]" value="1" <?php checked($settings['keep_import_json'], 1); ?>> Так</label></td></tr>
                     </table>
@@ -242,7 +250,7 @@ final class Page_Generator_Plugin {
         }
         $has_generator_blocks = has_block('page-generator/canvas', $post) || has_block('page-generator/component', $post);
         $elementor_data = get_post_meta($post->ID, '_elementor_data', true);
-        $has_elementor_canvas = is_string($elementor_data) && strpos($elementor_data, 'page-generator-canvas') !== false;
+        $has_elementor_canvas = is_string($elementor_data) && (strpos($elementor_data, 'page-generator-canvas') !== false || strpos($elementor_data, 'pg-el-flow') !== false);
         if ($has_generator_blocks || $has_elementor_canvas) {
             wp_enqueue_style('page-generator-frontend', plugins_url('assets/frontend.css', __FILE__), [], self::VERSION);
         }
@@ -358,7 +366,8 @@ final class Page_Generator_Plugin {
             isset($body['title']) ? sanitize_text_field($body['title']) : '',
             isset($body['editorMode']) ? sanitize_key($body['editorMode']) : '',
             true,
-            isset($body['forms']) ? sanitize_key($body['forms']) : ''
+            isset($body['forms']) ? sanitize_key($body['forms']) : '',
+            isset($body['layout']) ? sanitize_key($body['layout']) : ''
         );
         if (is_wp_error($result)) {
             $result->add_data(['status' => 500]);
@@ -373,6 +382,7 @@ final class Page_Generator_Plugin {
             return new WP_Error('page_generator_no_schema', 'Для цієї сторінки немає збереженої схеми.', ['status' => 404]);
         }
         $this->wpforms_enabled = $this->wpforms_wanted('');
+        $this->flow_enabled = $this->flow_wanted('');
         $target = $request['target'];
         if ($target === 'elementor') return ['target' => $target, 'models' => $this->serialize_elementor_schema($schema)];
         if ($target === 'blocks') return ['target' => $target, 'content' => $this->render_block_content($schema)];
@@ -675,7 +685,8 @@ final class Page_Generator_Plugin {
             isset($_POST['title']) ? sanitize_text_field(wp_unslash($_POST['title'])) : '',
             sanitize_key(wp_unslash($_POST['editorMode'] ?? '')),
             false,
-            sanitize_key(wp_unslash($_POST['forms'] ?? ''))
+            sanitize_key(wp_unslash($_POST['forms'] ?? '')),
+            sanitize_key(wp_unslash($_POST['layout'] ?? ''))
         );
         if (is_wp_error($result)) {
             wp_send_json_error($result->get_error_message());
@@ -685,7 +696,8 @@ final class Page_Generator_Plugin {
 
     // Writes a validated schema into a page through every exporter (blocks, Elementor tree) and returns a summary, or a WP_Error.
     // Shared by the editor's AJAX save and the REST PUT so both produce identical pages.
-    private function apply_schema($post_id, $schema, $raw_title, $requested_editor_mode, $always_store = false, $forms_mode = '') {
+    private function apply_schema($post_id, $schema, $raw_title, $requested_editor_mode, $always_store = false, $forms_mode = '', $layout_mode = '') {
+        $this->flow_enabled = $this->flow_wanted($layout_mode);
         $this->wpforms_enabled = $this->wpforms_wanted($forms_mode);
         if ($this->wpforms_enabled) {
             $schema = $this->attach_wpforms($schema, $post_id);
@@ -933,7 +945,7 @@ final class Page_Generator_Plugin {
     }
 
     private function render_block_content($schema) {
-        return $this->native_content($schema);
+        return $this->flow_enabled ? $this->native_flow_content($schema) : $this->native_content($schema);
     }
 
     private function is_elementor_page($post_id) {
@@ -1045,6 +1057,9 @@ final class Page_Generator_Plugin {
     private $elementor_canvas_width = 0.0;
 
     private function serialize_elementor_schema($schema) {
+        if ($this->flow_enabled) {
+            return $this->serialize_elementor_flow_schema($schema);
+        }
         $models = [];
         foreach ($this->group_sections($schema) as $group) {
             $first_section = $group['sections'][0] ?? [];
@@ -1093,6 +1108,8 @@ final class Page_Generator_Plugin {
         if ($validation_errors) {
             wp_send_json_error('Схема не пройшла перевірку: ' . implode(' ', $validation_errors));
         }
+        $this->wpforms_enabled = $this->wpforms_wanted(sanitize_key(wp_unslash($_POST['forms'] ?? '')));
+        $this->flow_enabled = $this->flow_wanted(sanitize_key(wp_unslash($_POST['layout'] ?? '')));
         wp_send_json_success(['models' => $this->serialize_elementor_schema($schema)]);
     }
 

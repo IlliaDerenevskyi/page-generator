@@ -48,6 +48,23 @@ $check('an unknown variant gives 422', $call('PUT', $route, ['schema' => $bad])-
 $call('PUT', $route, ['schema' => $base]);
 $check('without a mobile layout no breakpoint classes are written', strpos(get_post($post)->post_content, 'pg-bp-') === false);
 
+// Flow layout: the same schema as a responsive page (no absolute canvas), and back to pixel mode on request.
+$check('layout=flow builds a flow page', $call('PUT', $route, ['schema' => $base, 'layout' => 'flow'])->get_status() === 200);
+$flow_content = get_post($post)->post_content;
+$check('the flow page has no pixel canvas at its root', strpos($flow_content, 'pg-flow-page') !== false && strpos($flow_content, '"className":"page-generator-canvas"') === false);
+$check('the flow page parses into blocks', count(array_filter(parse_blocks($flow_content), function ($b) { return !empty($b['blockName']); })) >= 1);
+$call('PUT', $route, ['schema' => $base, 'layout' => 'pixel']);
+$check('layout=pixel brings the canvas back', strpos(get_post($post)->post_content, 'pg-flow-page') === false && strpos(get_post($post)->post_content, 'page-generator-canvas') !== false);
+
+// Flow layout in Elementor: native flex containers (no absolute positions), still valid JSON, tagged for the stylesheet.
+$check('Elementor + flow builds', $call('PUT', $route, ['schema' => $base, 'layout' => 'flow', 'editorMode' => 'elementor'])->get_status() === 200);
+$el_json = get_post_meta($post, '_elementor_data', true);
+$el_data = json_decode($el_json, true);
+$check('the Elementor flow tree is valid JSON with a flow root', is_array($el_data) && strpos($el_json, 'pg-el-flow') !== false);
+$call('PUT', $route, ['schema' => $base, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$check('layout=pixel brings the Elementor canvas back', strpos(get_post_meta($post, '_elementor_data', true), 'pg-el-flow') === false);
+$call('PUT', $route, ['schema' => $base, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
+
 // WPForms export: one form per detected form, reused on the next build instead of piling up duplicates.
 if (post_type_exists('wpforms')) {
     $has_form = false;

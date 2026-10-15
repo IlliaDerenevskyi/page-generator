@@ -22,6 +22,7 @@ trait Page_Generator_Native_Blocks {
         if (in_array($name, $this->bridged_blocks(), true)) {
             $args['attributes']['pgBox'] = ['type' => 'object'];
             $args['attributes']['pgCanvas'] = ['type' => 'object'];
+            $args['attributes']['pgFlow'] = ['type' => 'object'];
         }
         return $args;
     }
@@ -29,7 +30,7 @@ trait Page_Generator_Native_Blocks {
     public function enqueue_canvas_styles() {
         if (!is_admin()) {
             $post = get_post();
-            if (!$post instanceof WP_Post || strpos($post->post_content, 'page-generator-canvas') === false) {
+            if (!$post instanceof WP_Post || strpos($post->post_content, 'page-generator-canvas') === false && strpos($post->post_content, 'pg-flow-page') === false) {
                 return;
             }
         }
@@ -40,6 +41,10 @@ trait Page_Generator_Native_Blocks {
         $attrs = is_array($block['attrs'] ?? null) ? $block['attrs'] : [];
         $box = is_array($attrs['pgBox'] ?? null) ? $attrs['pgBox'] : null;
         $canvas = is_array($attrs['pgCanvas'] ?? null) ? $attrs['pgCanvas'] : null;
+        $flow = is_array($attrs['pgFlow'] ?? null) ? $attrs['pgFlow'] : null;
+        if ($flow && is_string($html) && $html !== '' && class_exists('WP_HTML_Tag_Processor')) {
+            $html = $this->apply_flow_attrs($html, $flow);
+        }
         if ((!$box && !$canvas) || !is_string($html) || $html === '' || !class_exists('WP_HTML_Tag_Processor')) {
             return $html;
         }
@@ -62,7 +67,8 @@ trait Page_Generator_Native_Blocks {
                     $variables .= '--pg-' . $key . ':' . (0 + $canvas[$key]) . ';';
                 }
             }
-            $variables .= '--pg-max:' . absint($this->settings()['default_container_width']) . 'px;';
+            $max = isset($canvas['max']) && is_numeric($canvas['max']) ? absint($canvas['max']) : absint($this->settings()['default_container_width']);
+            $variables .= '--pg-max:' . $max . 'px;';
             $classes[] = 'page-generator-canvas';
         }
         $processor = new WP_HTML_Tag_Processor($html);
@@ -75,6 +81,47 @@ trait Page_Generator_Native_Blocks {
         $style = trim((string) $processor->get_attribute('style'));
         $style = $style !== '' ? rtrim($style, ';') . ';' : '';
         $processor->set_attribute('style', $style . $variables);
+        return $processor->get_updated_html();
+    }
+
+    // pgFlow -> classes and CSS variables read by canvas.css (see "Flow layout").
+    public function apply_flow_attrs($html, $flow) {
+        $classes = ['pg-flow'];
+        $vars = [];
+        $number = function ($key, $name) use ($flow, &$vars) {
+            if (isset($flow[$key]) && is_numeric($flow[$key])) $vars[] = '--pg-' . $name . ':' . (0 + $flow[$key]);
+        };
+        if (!empty($flow['root'])) $classes[] = 'pg-fr';
+        if (!empty($flow['d'])) {
+            $classes[] = 'pg-fc';
+            $vars[] = '--pg-d:' . ($flow['d'] === 'row' ? 'row' : 'column');
+            if (!empty($flow['wr'])) $classes[] = 'pg-wrap';
+            if (($flow['ai'] ?? '') === 'c') $classes[] = 'pg-ai-c';
+            if (!empty($flow['jb'])) $classes[] = 'pg-jb';
+        }
+        if (!empty($flow['t'])) $classes[] = 'pg-ft';
+        if (!empty($flow['nw'])) $classes[] = 'pg-nw';
+        if (!empty($flow['sx'])) $classes[] = 'pg-sx';
+        if (!empty($flow['cols']) && is_array($flow['cols'])) {
+            $classes[] = 'pg-fg';
+            $vars[] = '--pg-cols:' . implode(' ', array_map(function ($n) { return (0 + $n) . 'fr'; }, $flow['cols']));
+        }
+        if (!empty($flow['im'])) $classes[] = 'pg-fm';
+        if (!empty($flow['fill'])) $classes[] = 'pg-fill';
+        if (isset($flow['gr'])) $classes[] = 'pg-grow';
+        if (($flow['ml'] ?? '') === 'c') $classes[] = 'pg-mc';
+        elseif (($flow['ml'] ?? '') === 'r') $classes[] = 'pg-mr';
+        elseif (isset($flow['ml']) && is_numeric($flow['ml'])) $vars[] = '--pg-ml:' . (0 + $flow['ml']);
+        foreach (['g' => 'g', 'b' => 'b', 'gr' => 'gr', 'mt' => 'mt', 'fs' => 'fs', 'w' => 'w', 'iw' => 'iw', 'ih' => 'ih', 'mh' => 'mh', 'bp' => 'bp', 'gs' => 'gs', 'tw' => 'tw'] as $key => $name) $number($key, $name);
+        if (!empty($flow['p']) && is_array($flow['p']) && count($flow['p']) === 4) {
+            foreach (['pt', 'pr', 'pb', 'pl'] as $i => $name) $vars[] = '--pg-' . $name . ':' . (0 + $flow['p'][$i]);
+        }
+        $processor = new WP_HTML_Tag_Processor($html);
+        if (!$processor->next_tag()) return $html;
+        foreach ($classes as $class) $processor->add_class($class);
+        $style = trim((string) $processor->get_attribute('style'));
+        $style = $style !== '' ? rtrim($style, ';') . ';' : '';
+        $processor->set_attribute('style', $style . implode(';', $vars) . ';');
         return $processor->get_updated_html();
     }
 
