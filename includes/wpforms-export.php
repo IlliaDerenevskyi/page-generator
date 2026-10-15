@@ -54,6 +54,9 @@ trait Page_Generator_WPForms_Export {
         if (!empty($schema['sections']) && is_array($schema['sections'])) {
             $visit($schema['sections']);
         }
+        if (!empty($schema['variants']['mobile']['sections']) && is_array($schema['variants']['mobile']['sections'])) {
+            $visit($schema['variants']['mobile']['sections']);
+        }
         update_post_meta($post_id, '_page_generator_wpforms', array_values($used));
         return $schema;
     }

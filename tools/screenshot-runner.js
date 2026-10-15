@@ -306,7 +306,7 @@ async function main() {
         // 'networkidle' never settles on a live site (background polling), so the wait is bounded to the load event
         // and the canvas itself. The whole run has to finish inside the web request, which nginx cuts at 60 s.
         await page.goto(url, { waitUntil: 'load', timeout: 25000 });
-        const canvas = page.locator('[data-page-generator="canvas"], .page-generator-canvas').first();
+        const canvas = page.locator('[data-page-generator="canvas"], .page-generator-canvas').locator('visible=true').first();
         await canvas.waitFor({ state: 'attached', timeout: 20000 }).catch(() => {});
         if (!await canvas.count()) {
             throw new Error('Generated page canvas was not found; comparison cannot be scoped safely.');

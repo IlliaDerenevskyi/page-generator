@@ -33,6 +33,21 @@ foreach (['elementor' => 'models', 'blocks' => 'content', 'html' => 'content'] a
 }
 $check('unknown export target gives 400', $call('GET', "/page-generator/v1/pages/$post/export", null, ['target' => 'pdf'])->get_status() === 400);
 
+// Mobile layout (variants.mobile): both canvases are written, tagged for CSS, and unknown variants are refused.
+$base = $schema;
+unset($base['variants']);
+$with_mobile = $base;
+$with_mobile['variants'] = ['mobile' => ['sections' => $base['sections']]];
+$check('a mobile layout is accepted', $call('PUT', $route, ['schema' => $with_mobile])->get_status() === 200);
+$content = get_post($post)->post_content;
+$check('both canvases are tagged by breakpoint', strpos($content, 'pg-bp-desktop') !== false && strpos($content, 'pg-bp-mobile') !== false);
+$check('the mobile layout survives GET', !empty($call('GET', $route)->get_data()['schema']['variants']['mobile']['sections']));
+$bad = $base;
+$bad['variants'] = ['tablet' => ['sections' => $base['sections']]];
+$check('an unknown variant gives 422', $call('PUT', $route, ['schema' => $bad])->get_status() === 422);
+$call('PUT', $route, ['schema' => $base]);
+$check('without a mobile layout no breakpoint classes are written', strpos(get_post($post)->post_content, 'pg-bp-') === false);
+
 // WPForms export: one form per detected form, reused on the next build instead of piling up duplicates.
 if (post_type_exists('wpforms')) {
     $has_form = false;

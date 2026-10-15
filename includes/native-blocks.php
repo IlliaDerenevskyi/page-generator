@@ -335,8 +335,9 @@ trait Page_Generator_Native_Blocks {
             foreach ($group['sections'] as $section) {
                 $sections[] = $this->native_node($section, ['x' => 0, 'y' => 0], $canvas_box);
             }
-            $attrs = ['pgCanvas' => ['w' => $width, 'h' => $height], 'className' => 'page-generator-canvas'];
-            $content[] = $this->native_block('core/group', $attrs, '<div class="wp-block-group page-generator-canvas">', implode("\n\n", array_filter($sections)), '</div>');
+            $class = 'page-generator-canvas' . $this->breakpoint_classes($group);
+            $attrs = ['pgCanvas' => ['w' => $width, 'h' => $height], 'className' => $class];
+            $content[] = $this->native_block('core/group', $attrs, '<div class="wp-block-group ' . $class . '">', implode("\n\n", array_filter($sections)), '</div>');
         }
         return implode("\n\n", $content) . "\n";
     }

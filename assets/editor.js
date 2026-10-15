@@ -183,6 +183,7 @@
                     '</div>' +
                     '<div class="page-generator-view" data-view="screenshots">' +
                         '<div id="pg-dropzone" class="page-generator-dropzone" role="button" tabindex="0"><strong>Перетягніть сюди один або кілька скріншотів</strong><span>або натисніть, щоб вибрати файли</span><input id="pg-images" type="file" accept="image/*" multiple hidden></div>' +
+                        '<div id="pg-file-roles" class="page-generator-file-roles"></div>' +
                         '<label class="page-generator-field">Опис поведінки та структури (необов’язково)<textarea id="pg-source-description" rows="6" placeholder="Наприклад: у верхньому меню є кнопка Категорії з випадаючим меню: техніка, товари для дому, будівельні матеріали та іграшки. Кнопка Про нас відкриває меню з FAQ та контактами."></textarea></label>' +
                         '<p class="page-generator-note">Опис не надсилається у зовнішні AI-сервіси. Плагін використовує локальний словник UI-компонентів і зберігає оригінальний текст у схемі.</p>' +
                         '<button type="button" id="pg-build-screenshot" class="page-generator-button page-generator-button-primary" disabled>Побудувати схему зі скріншотів</button>' +
@@ -603,6 +604,7 @@
                     $('#pg-status').text('Завантаження assets: ' + completed + '/' + files.length);
                     if (completed === files.length) {
                         $('#page-generator-modal').data('uploaded-images', uploaded);
+                        renderFileRoles(uploaded);
                         $('#pg-build-screenshot').prop('disabled', uploaded.length === 0);
                         if (failed) {
                             $('#pg-status').text('Завантажено ' + uploaded.length + ' з ' + files.length + ' файлів; не вдалося завантажити ' + failed + '. Перевірте тип, розмір файлів і права на медіафайли.');
@@ -610,6 +612,36 @@
                     }
                 });
         });
+    }
+
+    // Each uploaded file is either a section of the page (screenshots stack, as before) or the page's mobile layout. "Авто" calls a
+    // file mobile when it is clearly narrower than the others.
+    function renderFileRoles(uploaded) {
+        var $box = $('#pg-file-roles').empty();
+        if (uploaded.length < 2) return;
+        uploaded.forEach(function (item, index) {
+            item.role = item.role || 'auto';
+            var $select = $('<select>')
+                .append($('<option value="auto">').text('Авто'))
+                .append($('<option value="desktop">').text('Секція сторінки'))
+                .append($('<option value="mobile">').text('Мобільний макет'))
+                .val(item.role)
+                .on('change', function () { uploaded[index].role = $(this).val(); });
+            $box.append($('<label class="page-generator-field">').text(item.file.name + ' — ').append($select));
+        });
+    }
+
+    function splitByBreakpoint(analyses, uploaded) {
+        var widest = Math.max.apply(null, analyses.map(function (item) { return item.width; }));
+        var desktop = [];
+        var mobile = [];
+        analyses.forEach(function (analysis, index) {
+            var role = (uploaded[index] && uploaded[index].role) || 'auto';
+            var narrow = analyses.length > 1 && analysis.width <= widest * .6;
+            (role === 'mobile' || (role === 'auto' && narrow) ? mobile : desktop).push(analysis);
+        });
+        // Only mobile screenshots: there is nothing to pair them with, so they are an ordinary page.
+        return desktop.length ? { desktop: desktop, mobile: mobile } : { desktop: mobile, mobile: [] };
     }
 
     function buildScreenshotSchema() {
@@ -622,7 +654,12 @@
                 return analyzeScreenshot(item.file, item.data);
             }));
         }).then(function (analyses) {
-            var schema = buildScreenshotPageSchema(analyses, $('#pg-source-description').val());
+            var split = splitByBreakpoint(analyses, uploaded);
+            var schema = buildScreenshotPageSchema(split.desktop, $('#pg-source-description').val());
+            if (split.mobile.length) {
+                // The mobile screenshots become a second layout of the same page, shown below the mobile breakpoint.
+                schema.variants = { mobile: { sections: buildScreenshotPageSchema(split.mobile, $('#pg-source-description').val()).sections } };
+            }
             $('#page-generator-modal').data('schema', schema);
             $('#pg-output-actions').show();
             $('#pg-schema-tree').text(formatSchemaTree(schema));
@@ -2563,6 +2600,14 @@
                 appendTreeNode(lines, node, 2);
             });
         });
+        var mobile = schema.variants && schema.variants.mobile;
+        if (mobile) {
+            lines.push('Mobile layout');
+            (mobile.sections || []).forEach(function (section) {
+                lines.push('├── Section');
+                (section.elements || []).forEach(function (node) { appendTreeNode(lines, node, 2); });
+            });
+        }
         return lines.join('\n');
     }
 

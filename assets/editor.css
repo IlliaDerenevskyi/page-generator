@@ -43,3 +43,6 @@
 .page-generator-block-text { margin-bottom: 4px; }
 .page-generator-block-editor-preview.is-button > .page-generator-block-text { display: inline-block; padding: 8px 16px; border-radius: 6px; background: #1f8a4c; color: #fff; font-weight: 600; }
 @media (max-width: 600px) { .page-generator-settings-grid { grid-template-columns: 1fr; } }
+
+.page-generator-file-roles { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.page-generator-file-roles select { margin-left: 6px; }

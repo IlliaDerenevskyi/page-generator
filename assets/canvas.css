@@ -154,3 +154,15 @@
     /* Elements that stick out of the source frame must not widen the page. */
     overflow: hidden !important;
 }
+
+/* A page with a desktop and a mobile layout carries both canvases; the one for the current width is shown (767px = Elementor's mobile). */
+@media (max-width: 767px) {
+    .page-generator-canvas.pg-bp-desktop {
+        display: none !important;
+    }
+}
+@media (min-width: 768px) {
+    .page-generator-canvas.pg-bp-mobile {
+        display: none !important;
+    }
+}

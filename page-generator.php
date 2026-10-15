@@ -341,7 +341,8 @@ final class Page_Generator_Plugin {
             return new WP_Error('page_generator_bad_schema', 'Схема порожня: потрібне поле sections.', ['status' => 400]);
         }
         $errors = $this->validate_schema($schema);
-        foreach ($schema['sections'] as $section) {
+        $root_sections = array_merge($schema['sections'], (array) ($schema['variants']['mobile']['sections'] ?? []));
+        foreach ($root_sections as $section) {
             $root_type = is_array($section) ? sanitize_key($section['type'] ?? '') : '';
             // Root nodes are page regions: the plain ones plus the editor's specialised sections (form-section, table-section, ...).
             if (!in_array($root_type, ['header', 'footer', 'hero', 'navigation', 'main', 'aside', 'article'], true) && !preg_match('/^(?:[a-z]+-)?section$/', $root_type)) {
@@ -993,21 +994,52 @@ final class Page_Generator_Plugin {
             }
         };
         $visit($schema['sections'] ?? []);
+        if (isset($schema['variants'])) {
+            if (!is_array($schema['variants']) || array_diff(array_keys($schema['variants']), ['mobile'])) {
+                $errors[] = 'Невідомі варіанти макета: підтримується лише mobile.';
+            } elseif (isset($schema['variants']['mobile'])) {
+                if (empty($schema['variants']['mobile']['sections']) || !is_array($schema['variants']['mobile']['sections'])) {
+                    $errors[] = 'Мобільний макет не містить секцій.';
+                } else {
+                    $visit($schema['variants']['mobile']['sections']);
+                }
+            }
+        }
         if ($node_count === 0) $errors[] = 'Схема не містить вузлів.';
         return array_values(array_unique($errors));
     }
 
     // Consecutive sections from one source (one screenshot or Figma frame) share a canvas.
+    // Consecutive sections from one source (one screenshot or Figma frame) share a canvas. When the schema carries a mobile layout
+    // (variants.mobile) every canvas is tagged with its breakpoint so CSS can show one of the two.
     private function group_sections($schema) {
         $groups = [];
-        foreach (($schema['sections'] ?? []) as $section) {
-            $group_id = (string) ($section['sourceGroup'] ?? 'default');
-            if (!$groups || end($groups)['id'] !== $group_id) {
-                $groups[] = ['id' => $group_id, 'sections' => []];
+        $collect = function ($sections, $breakpoint) use (&$groups) {
+            $first = count($groups);
+            foreach ((array) $sections as $section) {
+                $group_id = (string) ($section['sourceGroup'] ?? 'default');
+                if (count($groups) === $first || end($groups)['id'] !== $group_id) {
+                    $groups[] = ['id' => $group_id, 'sections' => [], 'breakpoint' => $breakpoint];
+                }
+                $groups[count($groups) - 1]['sections'][] = $section;
             }
-            $groups[count($groups) - 1]['sections'][] = $section;
+        };
+        $mobile = $this->mobile_variant($schema);
+        $collect($schema['sections'] ?? [], $mobile ? 'desktop' : '');
+        if ($mobile) {
+            $collect($mobile['sections'], 'mobile');
         }
         return $groups;
+    }
+
+    private function mobile_variant($schema) {
+        $mobile = $schema['variants']['mobile'] ?? null;
+        return is_array($mobile) && !empty($mobile['sections']) && is_array($mobile['sections']) ? $mobile : null;
+    }
+
+    // CSS classes that let canvas.css show only the canvas for the current breakpoint (empty without a mobile layout).
+    private function breakpoint_classes($group) {
+        return !empty($group['breakpoint']) ? ' pg-bp pg-bp-' . $group['breakpoint'] : '';
     }
 
     private $elementor_canvas_width = 0.0;
@@ -1026,7 +1058,7 @@ final class Page_Generator_Plugin {
             }
             $canvas_settings = [
                 // pg-w-N tells assets/canvas-scale.js the width the px layout was built at, so it can zoom the canvas to fit narrower screens.
-                'css_classes' => 'page-generator-canvas' . ($width ? ' pg-el-canvas pg-w-' . $width : ''),
+                'css_classes' => 'page-generator-canvas' . ($width ? ' pg-el-canvas pg-w-' . $width : '') . $this->breakpoint_classes($group),
                 'flex_direction' => 'column',
                 'content_width' => 'full',
                 'padding' => $this->elementor_box_values(0),
