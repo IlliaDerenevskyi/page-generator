@@ -143,3 +143,14 @@
     font-weight: 700;
     cursor: pointer;
 }
+
+/* Elementor canvas: px layout at the source width, zoomed to fit by assets/canvas-scale.js. */
+.page-generator-canvas.pg-el-canvas {
+    zoom: var(--pg-zoom, 1);
+    max-width: none;
+    aspect-ratio: auto;
+    margin-left: auto;
+    margin-right: auto;
+    /* Elements that stick out of the source frame must not widen the page. */
+    overflow: hidden !important;
+}

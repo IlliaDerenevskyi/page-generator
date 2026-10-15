@@ -246,6 +246,12 @@ final class Page_Generator_Plugin {
         if ($has_generator_blocks || $has_elementor_canvas) {
             wp_enqueue_style('page-generator-frontend', plugins_url('assets/frontend.css', __FILE__), [], self::VERSION);
         }
+        if ($has_elementor_canvas) {
+            // Elementor lays the canvas out in px, so it needs the shared canvas rules and the zoom-to-fit script.
+            wp_enqueue_style('page-generator-canvas', plugins_url('assets/canvas.css', __FILE__), [], self::VERSION);
+            wp_enqueue_script('page-generator-canvas-scale', plugins_url('assets/canvas-scale.js', __FILE__), [], self::VERSION, true);
+            wp_localize_script('page-generator-canvas-scale', 'PageGeneratorScale', ['maxWidth' => absint($this->settings()['default_container_width'])]);
+        }
     }
 
     private function enqueue_generator_assets($handle, $block_editor = false) {
@@ -1019,12 +1025,16 @@ final class Page_Generator_Plugin {
                 $elements[] = $this->serialize_elementor_node($section, true, $canvas_box);
             }
             $canvas_settings = [
-                'css_classes' => 'page-generator-canvas',
+                // pg-w-N tells assets/canvas-scale.js the width the px layout was built at, so it can zoom the canvas to fit narrower screens.
+                'css_classes' => 'page-generator-canvas' . ($width ? ' pg-el-canvas pg-w-' . $width : ''),
                 'flex_direction' => 'column',
                 'content_width' => 'full',
                 'padding' => $this->elementor_box_values(0),
                 'flex_gap' => $this->elementor_gap(0),
             ];
+            if ($width) {
+                $canvas_settings['width'] = ['unit' => 'px', 'size' => $width, 'sizes' => []];
+            }
             if ($height) {
                 $canvas_settings['min_height'] = ['unit' => 'px', 'size' => $height];
             }
@@ -1362,12 +1372,15 @@ final class Page_Generator_Plugin {
             // Controls are placed by their own box like every other node; without it they fall into the flow and drift.
             $position = $dimensions && !empty($node['bbox']) ? $this->render_box_position_style($node, $dimensions) : '';
             if ($field_type === 'checkbox') {
-                return '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr($position . 'display:flex;align-items:center;gap:8px;') . '"><input type="checkbox"> ' . esc_html($label) . '</label>';
+                return '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr($position . 'display:flex;align-items:center;gap:' . $this->scaled_px(8) . ';') . '"><input type="checkbox"> ' . esc_html($label) . '</label>';
             }
-            $control_style = 'width:100%;box-sizing:border-box;margin:0;padding:0 12px;' . ($position ? 'height:100%;' : ($height ? 'min-height:' . $height . 'px;' : '')) . $this->render_surface_style($node) . 'border:1px solid #d5dde6;';
-            $wrapper = '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr(($position ?: 'position:relative;') . 'display:flex;flex-direction:column;margin:0;') . '">';
+            // Sizes follow the canvas like everything else: the caption from its measured box, the control text a little smaller.
+            $caption_size = max(10, absint(round((float) ($node['labelBox']['height'] ?? 0) * 1.15))) ?: 12;
+            $control_size = $this->font_size_css(max(10, min(14, $caption_size)), $dimensions);
+            $control_style = 'font-size:' . $control_size . ';width:100%;box-sizing:border-box;margin:0;padding:0 ' . $this->scaled_px(12) . ';' . ($position ? 'height:100%;' : ($height ? 'min-height:' . $height . 'px;' : '')) . $this->render_surface_style($node) . 'border:1px solid #d5dde6;';
+            $wrapper = '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr(($position ?: 'position:relative;') . 'display:flex;flex-direction:column;margin:0;font-size:' . $this->font_size_css($caption_size, $dimensions) . ';') . '">';
             // The caption sits above the control, outside the control's own box.
-            $caption = $label !== '' && $label !== 'Поле' ? '<span style="position:absolute;left:0;bottom:100%;margin-bottom:6px;white-space:nowrap;">' . esc_html($label) . '</span>' : '';
+            $caption = $label !== '' && $label !== 'Поле' ? '<span style="position:absolute;left:0;bottom:100%;margin-bottom:' . $this->scaled_px(6) . ';white-space:nowrap;">' . esc_html($label) . '</span>' : '';
             if ($field_type === 'select') {
                 return $wrapper . $caption . '<select style="' . esc_attr($control_style) . '"><option>' . esc_html($placeholder) . '</option></select></label>';
             }
@@ -1379,9 +1392,9 @@ final class Page_Generator_Plugin {
         }
         if ($type === 'form') {
             $fields = '';
-            $form_style = 'display:flex;flex-direction:column;gap:16px;padding:24px;box-sizing:border-box;';
+            $form_style = 'display:flex;flex-direction:column;gap:' . $this->scaled_px(16) . ';padding:' . $this->scaled_px(24) . ';box-sizing:border-box;';
             if ($dimensions && !empty($node['bbox'])) {
-                $form_style = $this->render_box_position_style($node, $dimensions) . 'display:flex;flex-direction:column;justify-content:space-between;box-sizing:border-box;padding:24px;overflow:hidden;';
+                $form_style = $this->render_box_position_style($node, $dimensions) . 'display:flex;flex-direction:column;justify-content:space-between;box-sizing:border-box;padding:' . $this->scaled_px(24) . ';overflow:hidden;';
             }
             $form_style .= $this->render_surface_style(['style' => array_intersect_key($node_style, ['background' => 1, 'borderRadius' => 1])]);
             $has_submit = false;
@@ -1400,7 +1413,7 @@ final class Page_Generator_Plugin {
                 if (($child['type'] ?? '') === 'button') {
                     $has_submit = true;
                     $button_position = $form_dims && !empty($child['bbox']) ? $this->render_box_position_style($child, $form_dims) : 'width:100%;';
-                    $button_style = $button_position . $this->render_surface_style($child) . 'min-height:' . max(36, absint($child['bbox']['height'] ?? 0)) . 'px;border:0;cursor:pointer;white-space:nowrap;font-size:' . $this->font_size_css(absint($child['style']['fontSize'] ?? 16), $dimensions) . ';';
+                    $button_style = $button_position . $this->render_surface_style($child) . 'min-height:' . $this->scaled_px(max(36, absint($child['bbox']['height'] ?? 0))) . ';border:0;cursor:pointer;white-space:nowrap;font-size:' . $this->font_size_css(absint($child['style']['fontSize'] ?? 16), $dimensions) . ';';
                     $fields .= "\n" . '<button type="submit" class="page-generator-block page-generator-button-node" style="' . esc_attr($button_style) . '">' . esc_html($child['text'] ?? ($child['content'] ?? '')) . '</button>';
                     continue;
                 }
@@ -1541,11 +1554,17 @@ final class Page_Generator_Plugin {
         return (($style['fontFamily'] ?? '') === 'serif') ? "font-family:Georgia,'Times New Roman',serif;" : '';
     }
 
+    // A source-pixel length that scales with the canvas (--pg-k is one source pixel in screen pixels).
+    private function scaled_px($pixels) {
+        return 'calc(' . (0 + $pixels) . ' * var(--pg-k, 1px))';
+    }
+
     private function font_size_css($font_size, $dimensions) {
         $source_width = (float) ($dimensions['fontWidth'] ?? $dimensions['width'] ?? 0);
         if ($source_width <= 0) return max(10, absint($font_size)) . 'px';
         $scaled = round(max(1, (float) $font_size) / $source_width * 100, 4);
-        return 'max(10px,' . $scaled . 'cqw)';
+        // No pixel floor: the whole canvas scales with its width, and a floor would make small text overlap on narrow screens.
+        return $scaled . 'cqw';
     }
 
     private function render_box_position_style($node, $dimensions, $root_section = false) {

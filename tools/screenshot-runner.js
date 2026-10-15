@@ -314,7 +314,7 @@ async function main() {
         // The theme wraps the canvas in a header, margins and a footer; pin the canvas to the viewport so the screenshot
         // lines up pixel for pixel with the reference instead of comparing the whole themed page.
         await canvas.evaluate((element) => {
-            element.style.cssText += ';position:fixed;left:0;top:0;width:100vw;max-width:none;margin:0;z-index:2147483647;';
+            element.style.cssText += ';position:fixed;left:0;top:0;width:100vw;max-width:none;margin:0;zoom:1;z-index:2147483647;';
             document.documentElement.style.overflow = 'hidden';
             // Where no block covers the canvas it is transparent; keep the admin bar and theme from showing through.
             if (/rgba\(0, 0, 0, 0\)|transparent/.test(getComputedStyle(element).backgroundColor)) element.style.backgroundColor = '#ffffff';
