@@ -998,6 +998,71 @@
         return { data: scaled, width: targetWidth, height: targetHeight, scale: targetWidth / width, textHeight: textHeight };
     }
 
+    // Serif or sans, read from the glyphs of one text line. Serif faces have thick vertical stems and thin horizontal strokes
+    // (serifs, crossbars), sans faces draw both at about the same weight. The ratio of the median stem width to the median
+    // thickness of the short vertical runs tells them apart. Returns null when the line is too small or too sparse to judge.
+    function classifyTypeface(data, width, box, bold) {
+        var x0 = Math.max(0, Math.floor(box.x)), y0 = Math.max(0, Math.floor(box.y));
+        var w = Math.min(width - x0, Math.ceil(box.width)), h = Math.min(Math.floor(data.length / 4 / width) - y0, Math.ceil(box.height));
+        if (w < 20 || h < 10) return null;
+        var counts = {}, best = 0, bgKey = 0;
+        for (var y = 0; y < h; y += 1) {
+            for (var x = 0; x < w; x += 1) {
+                var o = ((y0 + y) * width + x0 + x) * 4;
+                var key = ((data[o] >> 3) << 10) | ((data[o + 1] >> 3) << 5) | (data[o + 2] >> 3);
+                var n = (counts[key] || 0) + 1;
+                counts[key] = n;
+                if (n > best) { best = n; bgKey = key; }
+            }
+        }
+        var br = ((bgKey >> 10) << 3) + 4, bg = (((bgKey >> 5) & 31) << 3) + 4, bb = ((bgKey & 31) << 3) + 4;
+        var cover = new Float32Array(w * h);
+        var peak = 0;
+        for (var i = 0; i < w * h; i += 1) {
+            var q = ((y0 + Math.floor(i / w)) * width + x0 + (i % w)) * 4;
+            var d = Math.abs(data[q] - br) + Math.abs(data[q + 1] - bg) + Math.abs(data[q + 2] - bb);
+            cover[i] = d;
+            if (d > peak) peak = d;
+        }
+        if (peak < 120) return null;
+        for (var j = 0; j < cover.length; j += 1) cover[j] = Math.min(1, cover[j] / peak);
+        var rowInk = new Float32Array(h);
+        for (var ry = 0; ry < h; ry += 1) for (var rx = 0; rx < w; rx += 1) rowInk[ry] += cover[ry * w + rx];
+        var maxRow = Math.max.apply(null, Array.prototype.slice.call(rowInk));
+        var top = 0, bottom = h - 1;
+        while (top < h && rowInk[top] < maxRow * .12) top += 1;
+        while (bottom > top && rowInk[bottom] < maxRow * .12) bottom -= 1;
+        var glyphHeight = bottom - top + 1;
+        if (glyphHeight < 10) return null;
+        // Rows of the x-height band (clear of ascenders, descenders and rounded overshoot) carry the stems.
+        var bandTop = top + Math.round(glyphHeight * .38), bandBottom = top + Math.round(glyphHeight * .72);
+        var stems = [];
+        for (var sy = bandTop; sy <= bandBottom; sy += 1) {
+            var run = 0;
+            for (var sx = 0; sx <= w; sx += 1) {
+                var value = sx < w ? cover[sy * w + sx] : 0;
+                if (value > .12) run += value;
+                else if (run) { stems.push(run); run = 0; }
+            }
+        }
+        var shorts = [];
+        var shortLimit = glyphHeight * .3;
+        for (var cx = 0; cx < w; cx += 1) {
+            var length = 0, runLength = 0;
+            for (var cy = top; cy <= bottom + 1; cy += 1) {
+                var v = cy <= bottom ? cover[cy * w + cx] : 0;
+                if (v > .12) { length += v; runLength += 1; }
+                else if (runLength) { if (runLength <= shortLimit) shorts.push(length); length = 0; runLength = 0; }
+            }
+        }
+        if (stems.length < 12 || shorts.length < 12) return null;
+        var median = function (list) { var sorted = list.slice().sort(function (a, b) { return a - b; }); return sorted[Math.floor(sorted.length / 2)]; };
+        var ratio = median(stems) / Math.max(.2, median(shorts));
+        // Heavy strokes thicken the horizontals too, so bold text needs a higher ratio (and bigger glyphs) to count as serif.
+        if (bold && glyphHeight < 14) return null;
+        return { serif: ratio >= (bold ? 2.1 : 1.52), ratio: ratio };
+    }
+
     // Several OCR passes over the same image: keep the most confident reading wherever passes found the same word.
     function mergeWordPasses(passes) {
         var all = [];
@@ -1054,6 +1119,7 @@
         resampleLanczos: resampleLanczos,
         sharpen: sharpen,
         prepareForOcr: prepareForOcr,
+        classifyTypeface: classifyTypeface,
         mergeWordPasses: mergeWordPasses
     };
 }));

@@ -1097,12 +1097,14 @@ final class Page_Generator_Plugin {
             $text_style = $this->render_position_style($node, $dimensions);
             if (!empty($node_style['color'])) $text_style .= 'color:' . esc_attr($this->normalize_color($node_style['color'])) . ';';
             if (!empty($node_style['fontWeight'])) $text_style .= 'font-weight:' . absint($node_style['fontWeight']) . ';';
+            $text_style .= $this->font_family_css($node_style);
             return '<h2 class="page-generator-block page-generator-block-heading"' . $block_attrs . ' style="' . esc_attr($text_style) . '">' . esc_html($node['text'] ?? ($node['content'] ?? '')) . '</h2>';
         }
         if ($type === 'text') {
             $text_style = $this->render_position_style($node, $dimensions);
             if (!empty($node_style['color'])) $text_style .= 'color:' . esc_attr($this->normalize_color($node_style['color'])) . ';';
             if (!empty($node_style['fontWeight'])) $text_style .= 'font-weight:' . absint($node_style['fontWeight']) . ';';
+            $text_style .= $this->font_family_css($node_style);
             return '<p class="page-generator-block page-generator-block-text"' . $block_attrs . ' style="' . esc_attr($text_style) . '">' . nl2br(esc_html($node['text'] ?? ($node['content'] ?? ''))) . '</p>';
         }
         if (in_array($type, ['link', 'navigation', 'logo'], true)) {
@@ -1282,6 +1284,7 @@ final class Page_Generator_Plugin {
         if (!empty($style['color'])) $css .= 'color:' . $this->normalize_color($style['color']) . ';';
         if (!empty($style['borderRadius'])) $css .= 'border-radius:' . absint($style['borderRadius']) . 'px;';
         if (!empty($style['fontWeight'])) $css .= 'font-weight:' . absint($style['fontWeight']) . ';';
+        $css .= $this->font_family_css($style);
         return $css;
     }
 
@@ -1310,6 +1313,10 @@ final class Page_Generator_Plugin {
     }
 
     // Font sizes come from the screenshot in source pixels and scale with the canvas, like positions do.
+    private function font_family_css($style) {
+        return (($style['fontFamily'] ?? '') === 'serif') ? "font-family:Georgia,'Times New Roman',serif;" : '';
+    }
+
     private function font_size_css($font_size, $dimensions) {
         $source_width = (float) ($dimensions['fontWidth'] ?? $dimensions['width'] ?? 0);
         if ($source_width <= 0) return max(10, absint($font_size)) . 'px';

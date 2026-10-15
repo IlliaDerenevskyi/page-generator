@@ -187,6 +187,8 @@ trait Page_Generator_Native_Blocks {
     private function native_text_block($node, $origin, $tag, $custom_class = '', $link = false, $background = false) {
         $label = (string) ($node['text'] ?? ($node['content'] ?? ''));
         $style = $this->native_style($node, true, $background);
+        // The face is a class (not inline CSS) so the block still validates against its saved markup.
+        if (($node['style']['fontFamily'] ?? '') === 'serif') $custom_class = trim($custom_class . ' pg-serif');
         $attrs = [];
         if ($box = $this->native_box($node, $origin)) $attrs['pgBox'] = $box;
         if ($custom_class) $attrs['className'] = $custom_class;

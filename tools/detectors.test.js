@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -400,4 +400,26 @@ test('detectPhotoRegions stretches over a word that lies partly on the picture',
     const [region] = detectPhotoRegions(data, width, height, [word]);
     assert.ok(region.x <= 260, 'region starts at or before the word: ' + region.x);
     assert.ok(region.x + region.width >= 700);
+});
+
+test('classifyTypeface tells thick-stem thin-stroke glyphs (serif) from uniform strokes (sans)', () => {
+    const draw = (stem, bar, serif) => {
+        const width = 400, height = 40;
+        const data = new Uint8ClampedArray(width * height * 4).fill(255);
+        const paint = (x, y) => { const o = (y * width + x) * 4; data[o] = data[o + 1] = data[o + 2] = 20; };
+        for (let glyph = 0; glyph < 14; glyph += 1) {
+            const left = 10 + glyph * 27;
+            for (let y = 8; y < 32; y += 1) {
+                for (let s = 0; s < stem; s += 1) { paint(left + 4 + s, y); paint(left + 4 + 12 + s, y); }
+            }
+            for (let x = left + 4; x < left + 16 + stem; x += 1) for (let b = 0; b < bar; b += 1) paint(x, 18 + b);
+            if (serif) for (let x = left; x < left + 20 + stem; x += 1) { paint(x, 8); paint(x, 31); }
+        }
+        return { data, width, box: { x: 0, y: 0, width, height } };
+    };
+    const sans = draw(3, 3, false);
+    const serif = draw(5, 1, true);
+    assert.strictEqual(classifyTypeface(sans.data, sans.width, sans.box, false).serif, false);
+    assert.strictEqual(classifyTypeface(serif.data, serif.width, serif.box, false).serif, true);
+    assert.strictEqual(classifyTypeface(sans.data, sans.width, { x: 0, y: 0, width: 400, height: 6 }, false), null);
 });

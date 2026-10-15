@@ -1346,6 +1346,8 @@
                     confidence: line.words.length ? line.words.reduce(function (sum, word) { return sum + Number(word.confidence || 0); }, 0) / line.words.length / 100 : 0,
                     source: { detectedBy: ['ocr'], manual: false }
                 };
+                var typeface = detectLineTypeface(analysis.canvas, line, node.style.fontWeight);
+                if (typeface && typeface.serif) node.style.fontFamily = 'serif';
                 node = classifyTextNode(node, analysis);
                 return node;
             }).filter(function (node) { return node !== null; });
@@ -1468,6 +1470,14 @@
         if (density >= .42) return 700;
         if (density >= .3) return 600;
         return 400;
+    }
+
+    function detectLineTypeface(canvas, line, fontWeight) {
+        var x = Math.max(0, Math.floor(line.x)), y = Math.max(0, Math.floor(line.y));
+        var width = Math.min(canvas.width - x, Math.ceil(line.width)), height = Math.min(canvas.height - y, Math.ceil(line.height));
+        if (width < 20 || height < 10) return null;
+        var pixels = canvas.getContext('2d', { willReadFrequently: true }).getImageData(x, y, width, height).data;
+        return window.PageGeneratorDetectors.classifyTypeface(pixels, width, { x: 0, y: 0, width: width, height: height }, Number(fontWeight) >= 600);
     }
 
     function measureInkDensity(canvas, box) {

@@ -75,3 +75,8 @@
     justify-content: center;
     white-space: nowrap;
 }
+
+.page-generator-canvas .pg-serif,
+.page-generator-canvas .pg-serif a {
+    font-family: Georgia, 'Times New Roman', serif;
+}
