@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -285,4 +285,119 @@ test('isColourful needs saturation over much of the area, so anti-aliasing fring
     paint(120, 59, 129, 68, [40, 80, 230]);
     paint(129, 59, 138, 68, [230, 190, 20]);
     assert.equal(isColourful(data, width, { x: 120, y: 50, width: 18, height: 18 }), true);
+});
+
+test('a dark panel on a light page is a card, not just a light one', () => {
+    const width = 400;
+    const height = 300;
+    const data = new Uint8ClampedArray(width * height * 4).fill(245);
+    for (let y = 40; y < 200; y += 1) {
+        for (let x = 30; x < 230; x += 1) data.set([0, 0, 0, 255], (y * width + x) * 4);
+    }
+    const surfaces = classifySurfaces(detectSurfaces(data, width, height), width, data, height);
+    const panel = surfaces.find((surface) => surface.x === 30 && surface.y === 40);
+    assert.ok(panel);
+    assert.equal(panel.kind, 'card');
+});
+
+test('findIcons keeps a one-letter word inside a line of text but drops a lone letter on a picture', () => {
+    const { width, height, data, ring } = iconPage();
+    ring(50, 50, 18, [30, 30, 30]);
+    ring(200, 50, 18, [30, 30, 30]);
+    const inLine = { text: 'в', x: 200, y: 50, width: 18, height: 18 };
+    const neighbour = { text: 'анабиоз', x: 222, y: 50, width: 80, height: 18 };
+    const alone = { text: 'G', x: 50, y: 50, width: 18, height: 18 };
+    const found = findIcons(data, width, height, [alone, inLine, neighbour]);
+    assert.deepEqual(found.droppedWords, [alone]);
+    assert.equal(found.icons.length, 1);
+    assert.equal(found.icons[0].x, 50);
+});
+
+test('a vivid blue pill is a button while a pale pill stays a badge', () => {
+    const width = 1000;
+    const height = 300;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const pill = (x0, y0, w, h, colour) => {
+        for (let y = y0; y < y0 + h; y += 1) {
+            for (let x = x0; x < x0 + w; x += 1) {
+                const corner = (x - x0 < 6 && y - y0 < 6) || (x0 + w - x <= 6 && y - y0 < 6) || (x - x0 < 6 && y0 + h - y <= 6) || (x0 + w - x <= 6 && y0 + h - y <= 6);
+                if (!corner) data.set([...colour, 255], (y * width + x) * 4);
+            }
+        }
+    };
+    pill(100, 100, 200, 40, [0, 113, 227]);
+    pill(500, 100, 150, 30, [220, 245, 225]);
+    const surfaces = classifySurfaces(detectSurfaces(data, width, height), width, data, height);
+    assert.equal(surfaces.find((surface) => surface.x === 100 && surface.y === 100).kind, 'button');
+    assert.equal(surfaces.find((surface) => surface.x === 500 && surface.y === 100).kind, 'badge');
+});
+
+test('isRuleWord rejects thin border lines read as characters but keeps real letters', () => {
+    assert.equal(isRuleWord({ text: '|', x: 0, y: 0, width: 4, height: 86 }), true);
+    assert.equal(isRuleWord({ text: 'I', x: 0, y: 0, width: 4, height: 60 }), true);
+    assert.equal(isRuleWord({ text: 'I', x: 0, y: 0, width: 10, height: 30 }), false);
+    assert.equal(isRuleWord({ text: 'l', x: 0, y: 0, width: 8, height: 24 }), false);
+    assert.equal(isRuleWord({ text: 'Get', x: 0, y: 0, width: 4, height: 86 }), false);
+});
+
+test('detectSurfaces measures the corner radius of a pill and of a lightly rounded plate', () => {
+    const width = 600;
+    const height = 200;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    const plate = (x0, y0, w, h, radius) => {
+        for (let y = y0; y < y0 + h; y += 1) {
+            for (let x = x0; x < x0 + w; x += 1) {
+                const cx = Math.min(Math.max(x, x0 + radius), x0 + w - 1 - radius);
+                const cy = Math.min(Math.max(y, y0 + radius), y0 + h - 1 - radius);
+                if ((x - cx) ** 2 + (y - cy) ** 2 <= radius * radius) data.set([0, 113, 227, 255], (y * width + x) * 4);
+            }
+        }
+    };
+    plate(30, 40, 220, 44, 22);
+    plate(320, 40, 220, 44, 6);
+    const surfaces = detectSurfaces(data, width, height);
+    const pill = surfaces.find((surface) => surface.x === 30);
+    const light = surfaces.find((surface) => surface.x === 320);
+    assert.ok(pill.rounded >= 16 && pill.rounded <= 22, 'pill radius ' + pill.rounded);
+    assert.ok(light.rounded >= 3 && light.rounded <= 9, 'light radius ' + light.rounded);
+});
+
+test('detectPhotoRegions finds a picture, and ignores a flat button, a thin seam and masked text', () => {
+    const width = 1000;
+    const height = 600;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    let seed = 7;
+    const random = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (let y = 100; y < 300; y += 1) {
+        for (let x = 100; x < 400; x += 1) {
+            const base = 60 + (x - 100) / 3;
+            data.set([base + random() * 80, 120 + random() * 90, 200 - (y - 100) / 2 + random() * 40, 255], (y * width + x) * 4);
+        }
+    }
+    for (let y = 400; y < 460; y += 1) {
+        for (let x = 500; x < 800; x += 1) data.set([0, 113, 227, 255], (y * width + x) * 4);
+    }
+    for (let x = 0; x < width; x += 1) {
+        for (let y = 520; y < 528; y += 1) data.set([30, 30, 30, 255], (y * width + x) * 4);
+    }
+    const found = detectPhotoRegions(data, width, height, []);
+    assert.equal(found.length, 1);
+    assert.ok(Math.abs(found[0].x - 100) <= 16 && Math.abs(found[0].y - 100) <= 16);
+    assert.ok(found[0].width >= 280 && found[0].height >= 180);
+    assert.equal(detectPhotoRegions(data, width, height, [{ x: 100, y: 100, width: 300, height: 200 }]).length, 0);
+});
+
+test('detectPhotoRegions stretches over a word that lies partly on the picture', () => {
+    const width = 1000;
+    const height = 600;
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    let seed = 11;
+    const random = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    for (let y = 100; y < 300; y += 1) {
+        for (let x = 300; x < 700; x += 1) data.set([60 + random() * 120, 120 + random() * 90, 200 + random() * 40, 255], (y * width + x) * 4);
+    }
+    const word = { x: 260, y: 180, width: 100, height: 30 };
+    const [region] = detectPhotoRegions(data, width, height, [word]);
+    assert.ok(region.x <= 260, 'region starts at or before the word: ' + region.x);
+    assert.ok(region.x + region.width >= 700);
 });

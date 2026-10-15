@@ -69,9 +69,30 @@
             var rounded = [
                 inside(region.x, region.y), inside(right, region.y), inside(region.x, bottom), inside(right, bottom)
             ].filter(function (value) { return !value; }).length >= 3;
+            // Corner radius from where the top row starts: on a circle of radius r the first pixel of the top row sits r - sqrt(r - .25) in from the edge,
+            // so r is recovered from that offset. A row that never starts within reach is a pill (half the height).
+            var radius = 0;
+            if (rounded) {
+                var limit = Math.floor(Math.min(region.width, region.height) / 2);
+                var topRow = region.y * width;
+                var first = -1;
+                for (var scan = region.x; scan < region.x + Math.min(region.width, limit + 3); scan += 1) {
+                    if (labels[topRow + scan] === region.id) { first = scan; break; }
+                }
+                if (first < 0) {
+                    // Only something button-sized can be a pill; a large irregular area keeps a modest default.
+                    radius = region.height <= width * .09 ? limit : 6;
+                } else {
+                    var offset = first - region.x;
+                    radius = offset;
+                    for (var step = 0; step < 8; step += 1) radius = offset + Math.sqrt(Math.max(0, radius - .25));
+                    radius = Math.min(limit, Math.round(radius));
+                }
+                radius = Math.max(2, radius);
+            }
             return {
                 x: region.x, y: region.y, width: region.width, height: region.height,
-                fill: region.color, background: hex(region.color), rounded: rounded ? 6 : 0,
+                fill: region.color, background: hex(region.color), rounded: radius,
                 solidity: region.count / (region.width * region.height)
             };
         });
@@ -281,6 +302,168 @@
         return blobs;
     }
 
+    // Photographs and illustrations as pixels. Everything that differs from its local background is "ink"; ink is joined across small gaps into regions, and a
+    // region counts as a picture when it is large and holds many distinct colours with no dominant one (a button or card is a few flat colours, text is two).
+    // Ink under OCR word boxes is ignored, so lines of text never form a region of their own.
+    function detectPhotoRegions(data, width, height, skip, options) {
+        var opts = options || {};
+        var cell = opts.cell || 8;
+        var tile = 48;
+        var inkDistance = opts.inkDistance || 45;
+        var cols = Math.ceil(width / cell);
+        var rows = Math.ceil(height / cell);
+        // Local background: the commonest 5-bit colour of each 48 px tile.
+        var tCols = Math.ceil(width / tile);
+        var tRows = Math.ceil(height / tile);
+        var background = new Uint8Array(tCols * tRows * 3);
+        for (var ty = 0; ty < tRows; ty += 1) {
+            for (var tx = 0; tx < tCols; tx += 1) {
+                var counts = {};
+                var bestKey = 0, best = 0;
+                var yEnd = Math.min(height, (ty + 1) * tile), xEnd = Math.min(width, (tx + 1) * tile);
+                for (var y = ty * tile; y < yEnd; y += 2) {
+                    for (var x = tx * tile; x < xEnd; x += 2) {
+                        var o = (y * width + x) * 4;
+                        var key = ((data[o] >> 3) << 10) | ((data[o + 1] >> 3) << 5) | (data[o + 2] >> 3);
+                        var count = (counts[key] || 0) + 1;
+                        counts[key] = count;
+                        if (count > best) { best = count; bestKey = key; }
+                    }
+                }
+                var b = (ty * tCols + tx) * 3;
+                background[b] = ((bestKey >> 10) << 3) + 4;
+                background[b + 1] = (((bestKey >> 5) & 31) << 3) + 4;
+                background[b + 2] = ((bestKey & 31) << 3) + 4;
+            }
+        }
+        var inkCell = new Uint8Array(cols * rows);
+        for (var cy = 0; cy < rows; cy += 1) {
+            for (var cx = 0; cx < cols; cx += 1) {
+                var ink = 0, samples = 0;
+                var py1 = Math.min(height, (cy + 1) * cell), px1 = Math.min(width, (cx + 1) * cell);
+                for (var py = cy * cell; py < py1; py += 2) {
+                    for (var px = cx * cell; px < px1; px += 2) {
+                        var bg = (Math.floor(py / tile) * tCols + Math.floor(px / tile)) * 3;
+                        var q = (py * width + px) * 4;
+                        samples += 1;
+                        if (Math.abs(data[q] - background[bg]) + Math.abs(data[q + 1] - background[bg + 1]) + Math.abs(data[q + 2] - background[bg + 2]) > inkDistance) ink += 1;
+                    }
+                }
+                if (samples && ink / samples >= .12) inkCell[cy * cols + cx] = 1;
+            }
+        }
+        (skip || []).forEach(function (box) {
+            var c0 = Math.max(0, Math.floor(box.x / cell) - 1), c1 = Math.min(cols - 1, Math.floor((box.x + box.width) / cell) + 1);
+            var r0 = Math.max(0, Math.floor(box.y / cell) - 1), r1 = Math.min(rows - 1, Math.floor((box.y + box.height) / cell) + 1);
+            for (var r = r0; r <= r1; r += 1) {
+                for (var c = c0; c <= c1; c += 1) inkCell[r * cols + c] = 0;
+            }
+        });
+        // Opening: drop ink thinner than three cells (a seam where two sections meet, a rule line) so it cannot bridge unrelated things.
+        var eroded = new Uint8Array(cols * rows);
+        for (var ey = 1; ey < rows - 1; ey += 1) {
+            for (var ex = 1; ex < cols - 1; ex += 1) {
+                var solid = 1;
+                for (var oy = -1; oy <= 1 && solid; oy += 1) {
+                    for (var ox = -1; ox <= 1; ox += 1) {
+                        if (!inkCell[(ey + oy) * cols + ex + ox]) { solid = 0; break; }
+                    }
+                }
+                eroded[ey * cols + ex] = solid;
+            }
+        }
+        inkCell = new Uint8Array(cols * rows);
+        for (var ry = 1; ry < rows - 1; ry += 1) {
+            for (var rx = 1; rx < cols - 1; rx += 1) {
+                if (!eroded[ry * cols + rx]) continue;
+                for (var py2 = -1; py2 <= 1; py2 += 1) {
+                    for (var px2 = -1; px2 <= 1; px2 += 1) inkCell[(ry + py2) * cols + rx + px2] = 1;
+                }
+            }
+        }
+        var bridge = opts.bridge || 4;
+        var joined = new Uint8Array(cols * rows);
+        for (var jy = 0; jy < rows; jy += 1) {
+            for (var jx = 0; jx < cols; jx += 1) {
+                if (!inkCell[jy * cols + jx]) continue;
+                for (var dy = Math.max(0, jy - bridge); dy <= Math.min(rows - 1, jy + bridge); dy += 1) {
+                    for (var dx = Math.max(0, jx - bridge); dx <= Math.min(cols - 1, jx + bridge); dx += 1) joined[dy * cols + dx] = 1;
+                }
+            }
+        }
+        var seen = new Uint8Array(cols * rows);
+        var regions = [];
+        var minSize = opts.minSize || width * .06;
+        for (var start = 0; start < joined.length; start += 1) {
+            if (!joined[start] || seen[start]) continue;
+            var stack = [start];
+            seen[start] = 1;
+            var minC = cols, maxC = 0, minR = rows, maxR = 0, cells = 0;
+            while (stack.length) {
+                var index = stack.pop();
+                var c = index % cols, r = (index - c) / cols;
+                if (inkCell[index]) {
+                    cells += 1;
+                    if (c < minC) minC = c;
+                    if (c > maxC) maxC = c;
+                    if (r < minR) minR = r;
+                    if (r > maxR) maxR = r;
+                }
+                for (var ny = r - 1; ny <= r + 1; ny += 1) {
+                    for (var nx = c - 1; nx <= c + 1; nx += 1) {
+                        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+                        var next = ny * cols + nx;
+                        if (joined[next] && !seen[next]) { seen[next] = 1; stack.push(next); }
+                    }
+                }
+            }
+            if (!cells) continue;
+            var box = { x: minC * cell, y: minR * cell, width: Math.min(width, (maxC + 1) * cell) - minC * cell, height: Math.min(height, (maxR + 1) * cell) - minR * cell };
+            var fill = cells / ((maxC - minC + 1) * (maxR - minR + 1));
+            if (box.width < minSize || box.height < minSize || fill < (opts.minFill || .12)) continue;
+            if (box.width * box.height > width * height * (opts.maxShare || .6)) continue;
+            // Colour variety of the region's ink: a picture has many distinct shades and none dominates.
+            var shades = {};
+            var shadeCount = 0, top = 0, inkSamples = 0;
+            for (var sy = box.y; sy < box.y + box.height; sy += 3) {
+                for (var sx = box.x; sx < box.x + box.width; sx += 3) {
+                    if (!inkCell[Math.floor(sy / cell) * cols + Math.floor(sx / cell)]) continue;
+                    var so = (sy * width + sx) * 4;
+                    var shade = ((data[so] >> 3) << 10) | ((data[so + 1] >> 3) << 5) | (data[so + 2] >> 3);
+                    var seenCount = (shades[shade] || 0) + 1;
+                    if (seenCount === 1) shadeCount += 1;
+                    shades[shade] = seenCount;
+                    if (seenCount > top) top = seenCount;
+                    inkSamples += 1;
+                }
+            }
+            if (shadeCount < (opts.minShades || 60) || top / Math.max(1, inkSamples) > (opts.maxDominant || .5)) continue;
+            // A word lying partly on the picture belongs to it (it is baked into the image); stretch the box over such words so none is cut in half.
+            for (var pass = 0; pass < 2; pass += 1) {
+                (skip || []).forEach(function (word) {
+                    var w = Math.min(box.x + box.width, word.x + word.width) - Math.max(box.x, word.x);
+                    var h = Math.min(box.y + box.height, word.y + word.height) - Math.max(box.y, word.y);
+                    if (w <= 0 || h <= 0 || (w * h) / (word.width * word.height) < .25 || (w * h) / (word.width * word.height) > .98) return;
+                    var left = Math.min(box.x, word.x), top = Math.min(box.y, word.y);
+                    var right = Math.max(box.x + box.width, word.x + word.width), bottom = Math.max(box.y + box.height, word.y + word.height);
+                    box.x = Math.max(0, left); box.y = Math.max(0, top);
+                    box.width = Math.min(width, right) - box.x; box.height = Math.min(height, bottom) - box.y;
+                });
+            }
+            box.fill = fill;
+            box.shades = shadeCount;
+            regions.push(box);
+        }
+        return regions;
+    }
+
+    // A border or divider line that OCR read as a character: a bar or a lone "I", "l", "1" far taller than it is wide. Real letters are never that thin.
+    function isRuleWord(word) {
+        var text = String(word.text || '').trim();
+        if (!text || text.length > 2 || !/^[|¦!Il1]+$/.test(text)) return false;
+        return word.height >= Math.max(1, word.width) * 8;
+    }
+
     // Several distinct hues among the saturated pixels: a multi-colour logo, never a line of text.
     function isColourful(data, width, blob) {
         var buckets = new Array(12).fill(0);
@@ -311,6 +494,19 @@
             return w > 0 && h > 0 ? (w * h) / (inner.width * inner.height) : 0;
         };
         var length = function (word) { return String(word.text || '').trim().length; };
+        // A one-character word is junk when it is a symbol, or a letter or digit standing alone; a letter inside a line of text ("в", "и", "a") is a real word.
+        var inline = function (word) {
+            return words.some(function (other) {
+                if (other === word) return false;
+                var sameLine = Math.abs((other.y + other.height / 2) - (word.y + word.height / 2)) <= word.height * .6;
+                var gap = Math.max(other.x - (word.x + word.width), word.x - (other.x + other.width));
+                return sameLine && gap <= Math.max(word.height, 14) * 1.5;
+            });
+        };
+        var isLoneJunk = function (word) {
+            if (length(word) > 1) return false;
+            return !/[\p{L}\p{N}]/u.test(String(word.text || '')) || !inline(word);
+        };
         var shortWords = words.filter(function (word) { return length(word) <= 3; });
         var longWords = words.filter(function (word) { return length(word) > 3; });
         var icons = [];
@@ -319,7 +515,7 @@
             var covered = shortWords.filter(function (word) { return overlap(word, blob) >= .4 || overlap(blob, word) >= .6; });
             if (!covered.length) { icons.push(blob); return; }
             var colourful = isColourful(data, width, blob);
-            var junk = covered.every(function (word) { return length(word) <= 1 || colourful; });
+            var junk = covered.every(function (word) { return isLoneJunk(word) || colourful; });
             if (!junk) return;
             icons.push(blob);
             covered.forEach(function (word) { droppedWords.push(word); });
@@ -344,7 +540,9 @@
                 if (outline) { surface.outlined = true; surface.borderColor = outline.color; }
             }
             if (around < .6) return;
-            if (surface.height >= unit * 1.1 && surface.height <= unit * 4.2 && surface.width <= unit * 22 && ratio >= 1.8 &&
+            // A vivid, high-contrast pill is a call-to-action button, not a status chip; chips are pastel or small.
+            var vividPill = contrast >= 70 && saturation(surface.fill) >= 60 && surface.height >= unit * 2.3;
+            if (!vividPill && surface.height >= unit * 1.1 && surface.height <= unit * 4.2 && surface.width <= unit * 22 && ratio >= 1.8 &&
                 contrast >= 12 && surface.rounded && surface.width * surface.height <= unit * unit * 70) {
                 surface.kind = 'badge';
             } else if (surface.height >= unit * 1.6 && surface.height <= unit * 9 && surface.width >= unit * 6 && ratio >= 1.8 &&
@@ -358,7 +556,9 @@
                 // A textarea is taller than a field and is trusted by its row, not by a column of siblings.
                 surface.kind = 'input-candidate';
                 surface.tall = true;
-            } else if (surface.height >= unit * 5 && surface.width >= unit * 25 && luminance(surface.fill) >= 235 && colorStep >= 9) {
+            } else if (surface.height >= unit * 5 && surface.width >= unit * 25 && ((luminance(surface.fill) >= 235 && colorStep >= 9) || colorStep >= 60)) {
+                // A light card needs only a faint step from its page; a dark or coloured panel is unmistakable, so any strong step qualifies.
+
                 surface.kind = 'card';
             }
         });
@@ -839,6 +1039,8 @@
         detectIconBlobs: detectIconBlobs,
         findIcons: findIcons,
         isColourful: isColourful,
+        isRuleWord: isRuleWord,
+        detectPhotoRegions: detectPhotoRegions,
         detectSurfaces: detectSurfaces,
         classifySurfaces: classifySurfaces,
         detectLineRuns: detectLineRuns,

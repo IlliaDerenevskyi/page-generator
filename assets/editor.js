@@ -673,6 +673,8 @@
                             return results;
                         });
                     }).then(function (results) {
+                        results[0] = results[0].filter(function (word) { return !window.PageGeneratorDetectors.isRuleWord(word); });
+                        mergePhotoRegions(canvas, results[1], window.PageGeneratorDetectors.detectPhotoRegions(pixelData, canvas.width, canvas.height, results[0]));
                         var found = window.PageGeneratorDetectors.findIcons(pixelData, canvas.width, canvas.height, results[0]);
                         results[0] = results[0].filter(function (word) { return found.droppedWords.indexOf(word) === -1; });
                         var iconCandidates = found.icons.filter(function (icon) {
@@ -711,6 +713,27 @@
             };
             reader.readAsDataURL(file);
         });
+    }
+
+    // Pixel-detected pictures replace the contour fragments they swallow; a picture the contour pass already found whole is kept as it is.
+    function mergePhotoRegions(canvas, regionResult, photos) {
+        var boxes = regionResult.boxes;
+        var added = [];
+        photos.forEach(function (photo) {
+            var duplicate = boxes.some(function (box) { return box.kind === 'photo-candidate' && boxOverlapRatio(box, photo) > .5; });
+            if (duplicate) return;
+            var area = photo.width * photo.height;
+            for (var index = boxes.length - 1; index >= 0; index -= 1) {
+                var box = boxes[index];
+                if (box.width * box.height <= area * 1.1 && centerInside(box, photo)) boxes.splice(index, 1);
+            }
+            added.push({
+                x: photo.x, y: photo.y, width: photo.width, height: photo.height,
+                variance: 9999, background: sampleRegionBackground(canvas, photo), kind: 'photo-candidate',
+                photo: true, textLike: false, rounded: 0, gradient: false, uniform: 0
+            });
+        });
+        added.reverse().forEach(function (box) { boxes.unshift(box); });
     }
 
     // Icons and logos cut out of the screenshot, uploaded as media assets (capped so a very busy page does not flood the server).
@@ -2389,7 +2412,7 @@
                 box.x >= candidate.x - 3 && box.y >= candidate.y - 3 &&
                 box.x + box.width <= candidate.x + candidate.width + 3 &&
                 box.y + box.height <= candidate.y + candidate.height + 3 &&
-                candidate.height <= box.height * 4;
+                candidate.height <= box.height * 5;
         });
         if (surface) return surface;
         return (analysis.boxes || []).find(function (candidate) {
@@ -2428,7 +2451,9 @@
                 node.bbox.y < analysis.width * .2 &&
                 (node.text || '').length <= 32 &&
                 fontSize <= Math.max(16, analysis.width * .015);
-            if (node.type === 'link' || shortTopHeading) {
+            // The page-wide type is 'header' for the whole screenshot, so only links in the top band belong to the navigation; the rest of the page's links stay in place.
+            var topLink = node.type === 'link' && (!node.bbox || node.bbox.y < analysis.width * .2);
+            if (topLink || shortTopHeading) {
                 navigation.push(node);
             } else {
                 content.push(node);
