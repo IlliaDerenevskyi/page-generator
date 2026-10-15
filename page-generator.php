@@ -26,6 +26,7 @@ final class Page_Generator_Plugin {
         add_action('enqueue_block_editor_assets', [$this, 'enqueue_block_editor_assets']);
         $this->register_native_bridge();
 
+        add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('wp_ajax_page_generator_scan_figma', [$this, 'scan_figma']);
         add_action('wp_ajax_page_generator_import_figma', [$this, 'import_figma']);
         add_action('wp_ajax_page_generator_create_page', [$this, 'create_page']);
@@ -279,6 +280,88 @@ final class Page_Generator_Plugin {
         if (!current_user_can($capability)) {
             wp_send_json_error('Недостатньо прав.', 403);
         }
+    }
+
+    public function register_rest_routes() {
+        $permission = function ($request) {
+            return current_user_can('edit_post', absint($request['id']));
+        };
+        register_rest_route('page-generator/v1', '/pages/(?P<id>\\d+)/schema', [
+            ['methods' => 'GET', 'callback' => [$this, 'rest_get_schema'], 'permission_callback' => $permission],
+            ['methods' => 'PUT', 'callback' => [$this, 'rest_put_schema'], 'permission_callback' => $permission],
+        ]);
+        register_rest_route('page-generator/v1', '/pages/(?P<id>\\d+)/export', [
+            'methods' => 'GET',
+            'callback' => [$this, 'rest_export'],
+            'permission_callback' => $permission,
+            'args' => ['target' => ['required' => true, 'type' => 'string', 'enum' => ['elementor', 'blocks', 'html']]],
+        ]);
+    }
+
+    private function rest_saved_schema($post_id) {
+        $stored = get_post_meta($post_id, '_page_generator_schema', true);
+        $schema = is_string($stored) ? json_decode($stored, true) : null;
+        return is_array($schema) && !empty($schema['sections']) ? $schema : null;
+    }
+
+    public function rest_get_schema($request) {
+        $post_id = absint($request['id']);
+        $schema = $this->rest_saved_schema($post_id);
+        if (!$schema) {
+            return new WP_Error('page_generator_no_schema', 'Для цієї сторінки немає збереженої схеми.', ['status' => 404]);
+        }
+        return [
+            'id' => $post_id,
+            'schema' => $schema,
+            'outputMode' => get_post_meta($post_id, '_page_generator_output_mode', true) ?: null,
+        ];
+    }
+
+    // Accepts {"schema": {...}} (optionally "title", "editorMode") or the bare schema; the page is rebuilt from it exactly as after an editor save.
+    public function rest_put_schema($request) {
+        $post_id = absint($request['id']);
+        $body = $request->get_json_params();
+        if (!is_array($body)) {
+            return new WP_Error('page_generator_bad_body', 'Очікується JSON-тіло запиту.', ['status' => 400]);
+        }
+        $schema = isset($body['schema']) && is_array($body['schema']) ? $body['schema'] : $body;
+        if (empty($schema['sections']) || !is_array($schema['sections'])) {
+            return new WP_Error('page_generator_bad_schema', 'Схема порожня: потрібне поле sections.', ['status' => 400]);
+        }
+        $errors = $this->validate_schema($schema);
+        foreach ($schema['sections'] as $section) {
+            $root_type = is_array($section) ? sanitize_key($section['type'] ?? '') : '';
+            // Root nodes are page regions: the plain ones plus the editor's specialised sections (form-section, table-section, ...).
+            if (!in_array($root_type, ['header', 'footer', 'hero', 'navigation', 'main', 'aside', 'article'], true) && !preg_match('/^(?:[a-z]+-)?section$/', $root_type)) {
+                $errors[] = 'Невідомий тип кореневого вузла: ' . ($root_type ?: 'порожній') . '.';
+            }
+        }
+        if ($errors) {
+            return new WP_Error('page_generator_invalid_schema', 'Схема не пройшла перевірку: ' . implode(' ', $errors), ['status' => 422]);
+        }
+        $result = $this->apply_schema(
+            $post_id,
+            $schema,
+            isset($body['title']) ? sanitize_text_field($body['title']) : '',
+            isset($body['editorMode']) ? sanitize_key($body['editorMode']) : '',
+            true
+        );
+        if (is_wp_error($result)) {
+            $result->add_data(['status' => 500]);
+        }
+        return $result;
+    }
+
+    public function rest_export($request) {
+        $post_id = absint($request['id']);
+        $schema = $this->rest_saved_schema($post_id);
+        if (!$schema) {
+            return new WP_Error('page_generator_no_schema', 'Для цієї сторінки немає збереженої схеми.', ['status' => 404]);
+        }
+        $target = $request['target'];
+        if ($target === 'elementor') return ['target' => $target, 'models' => $this->serialize_elementor_schema($schema)];
+        if ($target === 'blocks') return ['target' => $target, 'content' => $this->render_block_content($schema)];
+        return ['target' => $target, 'content' => $this->render_html($schema)];
     }
 
     public function scan_figma() {
@@ -571,7 +654,21 @@ final class Page_Generator_Plugin {
         if ($validation_errors) {
             wp_send_json_error('Схема не пройшла перевірку: ' . implode(' ', $validation_errors));
         }
-        $raw_title = isset($_POST['title']) ? sanitize_text_field(wp_unslash($_POST['title'])) : '';
+        $result = $this->apply_schema(
+            $post_id,
+            $schema,
+            isset($_POST['title']) ? sanitize_text_field(wp_unslash($_POST['title'])) : '',
+            sanitize_key(wp_unslash($_POST['editorMode'] ?? ''))
+        );
+        if (is_wp_error($result)) {
+            wp_send_json_error($result->get_error_message());
+        }
+        wp_send_json_success($result);
+    }
+
+    // Writes a validated schema into a page through every exporter (blocks, Elementor tree) and returns a summary, or a WP_Error.
+    // Shared by the editor's AJAX save and the REST PUT so both produce identical pages.
+    private function apply_schema($post_id, $schema, $raw_title, $requested_editor_mode, $always_store = false) {
         $post_before_update = get_post($post_id);
         $title = $post_before_update ? $post_before_update->post_title : '';
         if (in_array(trim($title), ['Imported screenshot page', 'Imported page'], true)) {
@@ -580,7 +677,6 @@ final class Page_Generator_Plugin {
         if ($raw_title && $raw_title !== 'Imported screenshot page') {
             $title = $raw_title;
         }
-        $requested_editor_mode = sanitize_key(wp_unslash($_POST['editorMode'] ?? ''));
         $elementor_mode = $requested_editor_mode === 'elementor'
             ? true
             : ($requested_editor_mode === 'gutenberg' ? false : $this->is_elementor_page($post_id));
@@ -594,22 +690,32 @@ final class Page_Generator_Plugin {
             'post_content' => $block_content,
         ], true);
         if (is_wp_error($updated)) {
-            wp_send_json_error($updated->get_error_message());
+            return $updated;
         }
         if (!$updated) {
-            wp_send_json_error('WordPress не оновив поточну сторінку.');
+            return new WP_Error('page_generator_not_updated', 'WordPress не оновив поточну сторінку.');
         }
         $post = get_post($post_id);
         if (!$post) {
-            wp_send_json_error('Оновлену сторінку не знайдено.');
+            return new WP_Error('page_generator_missing', 'Оновлену сторінку не знайдено.');
         }
-        if ($this->settings()['keep_import_json']) {
-            update_post_meta($post_id, '_page_generator_schema', wp_json_encode($schema));
+        if ($always_store || $this->settings()['keep_import_json']) {
+            update_post_meta($post_id, '_page_generator_schema', wp_slash(wp_json_encode($schema)));
         }
         if ($elementor_mode) {
             $elementor_data = $this->serialize_elementor_schema($schema);
             update_post_meta($post_id, '_elementor_data', wp_slash(wp_json_encode($elementor_data)));
+            // Without these Elementor ignores _elementor_data and renders post_content, so a REST-built page would stay plain blocks.
+            update_post_meta($post_id, '_elementor_edit_mode', 'builder');
+            update_post_meta($post_id, '_elementor_template_type', 'wp-page');
             delete_post_meta($post_id, '_elementor_css');
+            // Elementor also keeps rendered element HTML and page assets in meta; stale copies would show the previous tree.
+            delete_post_meta($post_id, '_elementor_element_cache');
+            delete_post_meta($post_id, '_elementor_page_assets');
+            // The generated stylesheet is keyed by element ids, so a rebuilt tree must not keep the old file.
+            if (class_exists('\\Elementor\\Core\\Files\\CSS\\Post')) {
+                (new \Elementor\Core\Files\CSS\Post($post_id))->delete();
+            }
         } else {
             delete_post_meta($post_id, '_elementor_data');
             delete_post_meta($post_id, '_elementor_css');
@@ -618,7 +724,7 @@ final class Page_Generator_Plugin {
         update_post_meta($post_id, '_page_generator_output_mode', $elementor_mode ? 'elementor-native-tree' : 'gutenberg-native-blocks');
         update_post_meta($post_id, '_page_generator_render_length', strlen($rendered_html));
         update_post_meta($post_id, '_page_generator_render_hash', md5($rendered_html));
-        wp_send_json_success([
+        return [
             'mode' => 'update-current-page',
             'build' => self::VERSION,
             'id' => $post_id,
@@ -632,7 +738,7 @@ final class Page_Generator_Plugin {
             'outputMode' => $elementor_mode ? 'elementor-native-tree' : 'gutenberg-native-blocks',
             'blockCount' => substr_count($block_content, '<!-- wp:'),
             'contentHash' => md5($block_content),
-        ]);
+        ];
     }
 
     public function compare_page() {
@@ -884,6 +990,8 @@ final class Page_Generator_Plugin {
         return $groups;
     }
 
+    private $elementor_canvas_width = 0.0;
+
     private function serialize_elementor_schema($schema) {
         $models = [];
         foreach ($this->group_sections($schema) as $group) {
@@ -891,6 +999,7 @@ final class Page_Generator_Plugin {
             $width = absint($first_section['settings']['sourceWidth'] ?? 0);
             $height = absint($first_section['settings']['sourceHeight'] ?? 0);
             $canvas_box = ['x' => 0, 'y' => 0, 'width' => $width, 'height' => $height];
+            $this->elementor_canvas_width = (float) $width;
             $elements = [];
             foreach ($group['sections'] as $section) {
                 $elements[] = $this->serialize_elementor_node($section, true, $canvas_box);
@@ -899,6 +1008,8 @@ final class Page_Generator_Plugin {
                 'css_classes' => 'page-generator-canvas',
                 'flex_direction' => 'column',
                 'content_width' => 'full',
+                'padding' => $this->elementor_box_values(0),
+                'flex_gap' => $this->elementor_gap(0),
             ];
             if ($height) {
                 $canvas_settings['min_height'] = ['unit' => 'px', 'size' => $height];
@@ -938,38 +1049,49 @@ final class Page_Generator_Plugin {
         $text_color = $this->normalize_color($style['color'] ?? ($node['color'] ?? ''));
         $background_color = $this->normalize_color($style['background'] ?? ($node['background'] ?? ''));
 
-        if ($type === 'heading') {
-            $widget_settings = ['title' => wp_kses_post($node['text'] ?? ($node['content'] ?? ''))];
-            if ($text_color !== '#ffffff' || !empty($style['color']) || !empty($node['color'])) {
-                $widget_settings['title_color'] = $text_color;
+        $text_types = ['heading', 'text', 'link', 'logo', 'badge'];
+        if (in_array($type, $text_types, true)) {
+            $label = (string) ($node['text'] ?? ($node['content'] ?? ''));
+            $has_plate = !empty($style['background']) || !empty($node['background']);
+            $widget = $this->elementor_text_widget($id, $type, $label, $style, $settings, $text_color, $has_plate);
+            if (!$has_plate) {
+                return $this->apply_elementor_geometry($widget, $node, $parent_bbox);
             }
-            if (!empty($style['fontSize']) || !empty($settings['fontSize'])) {
-                $widget_settings['__dynamic__'] = [];
-                $widget_settings['typography_typography'] = 'custom';
-                $widget_settings['typography_font_size'] = [
-                    'unit' => 'px',
-                    'size' => max(10, absint($style['fontSize'] ?? ($settings['fontSize'] ?? 16))),
-                ];
-            }
-            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => $widget_settings, 'elements' => []], $node, $parent_bbox);
-        }
-        if ($type === 'text') {
-            $widget_settings = ['editor' => wp_kses_post(nl2br($node['text'] ?? ($node['content'] ?? '')))];
-            if ($text_color !== '#ffffff' || !empty($style['color']) || !empty($node['color'])) {
-                $widget_settings['text_color'] = $text_color;
-            }
-            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => $widget_settings, 'elements' => []], $node, $parent_bbox);
+            // A filled text node (badge, tag) is a plate: a container carries the fill, radius and border, the text sits centred in it.
+            $plate = [
+                'id' => $id . 'p',
+                'elType' => 'container',
+                'isInner' => true,
+                'settings' => $this->elementor_plate_settings($style, $node, 'row') + ['flex_justify_content' => 'center', 'flex_align_items' => 'center'],
+                'elements' => [$widget],
+            ];
+            return $this->apply_elementor_geometry($plate, $node, $parent_bbox);
         }
         if ($type === 'button') {
             $widget_settings = [
                 'text' => sanitize_text_field($node['text'] ?? ($node['content'] ?? 'Кнопка')),
                 'link' => ['url' => esc_url_raw($node['behavior']['url'] ?? '#')],
-            ];
+                'align' => 'justify',
+                '_margin' => $this->elementor_box_values(0),
+            ] + $this->elementor_typography($style, $settings);
             if ($text_color !== '#ffffff' || !empty($style['color']) || !empty($node['color'])) {
                 $widget_settings['button_text_color'] = $text_color;
             }
             if ($background_color !== '#ffffff' || !empty($style['background']) || !empty($node['background'])) {
                 $widget_settings['background_color'] = $background_color;
+            }
+            // The button is as big as its plate on the screenshot: full width, and vertical padding that makes up the height.
+            $font = max(10, absint($style['fontSize'] ?? ($settings['fontSize'] ?? 16)));
+            $plate_height = (float) ($node['bbox']['height'] ?? 0);
+            $pad_y = $plate_height > 0 ? max(0, round(($plate_height - $font * 1.2) / 2, 2)) : 12;
+            $widget_settings['text_padding'] = ['unit' => 'px', 'top' => (string) $pad_y, 'right' => '0', 'bottom' => (string) $pad_y, 'left' => '0', 'isLinked' => false];
+            if (!empty($style['borderRadius'])) {
+                $widget_settings['border_radius'] = $this->elementor_box_values(absint($style['borderRadius']));
+            }
+            if (!empty($style['borderColor']) && !empty($style['borderWidth'])) {
+                $widget_settings['border_border'] = 'solid';
+                $widget_settings['border_width'] = $this->elementor_box_values(absint($style['borderWidth']));
+                $widget_settings['border_color'] = $this->normalize_color($style['borderColor']);
             }
             return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'button', 'settings' => $widget_settings, 'elements' => []], $node, $parent_bbox);
         }
@@ -978,36 +1100,32 @@ final class Page_Generator_Plugin {
             return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'image', 'settings' => ['image' => ['url' => esc_url_raw($node['url'] ?? ($asset['url'] ?? '')), 'id' => absint($node['attachmentId'] ?? ($asset['id'] ?? 0))]], 'elements' => []], $node, $parent_bbox);
         }
         if ($type === 'icon') {
-            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'icon', 'settings' => [], 'elements' => []], $node, $parent_bbox);
-        }
-        if (in_array($type, ['link', 'logo', 'badge'], true)) {
-            $label = esc_html($node['text'] ?? ($node['content'] ?? ''));
-            $widget_settings = ['editor' => $type === 'badge' ? '<span class="pg-badge">' . $label . '</span>' : '<p>' . $label . '</p>'];
-            if ($text_color !== '#ffffff' || !empty($style['color']) || !empty($node['color'])) {
-                $widget_settings['text_color'] = $text_color;
+            // An Elementor icon widget with no icon chosen shows a default star, so an icon without a picture is an empty container.
+            $asset = is_array($node['asset'] ?? null) ? $node['asset'] : [];
+            $icon_url = $node['url'] ?? ($asset['url'] ?? '');
+            if ($icon_url) {
+                return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'image', 'settings' => ['image' => ['url' => esc_url_raw($icon_url), 'id' => absint($node['attachmentId'] ?? ($asset['id'] ?? 0))]], 'elements' => []], $node, $parent_bbox);
             }
-            $font = $style['fontSize'] ?? ($settings['fontSize'] ?? null);
-            if (is_numeric($font) && $font > 0) {
-                $widget_settings['typography_typography'] = 'custom';
-                $widget_settings['typography_font_size'] = ['unit' => 'px', 'size' => max(10, absint($font))];
-            }
-            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => $widget_settings, 'elements' => []], $node, $parent_bbox);
+            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'container', 'isInner' => true, 'settings' => $this->elementor_plate_settings($style, $node, 'row'), 'elements' => []], $node, $parent_bbox);
         }
         if ($type === 'form' || $type === 'form-field' || $type === 'table') {
-            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'html', 'settings' => ['html' => $this->render_node($node)], 'elements' => []], $node, $parent_bbox);
+            $html = $this->render_node($node);
+            $box = is_array($node['bbox'] ?? null) ? $node['bbox'] : null;
+            if ($type === 'form' && $box && !empty($box['width']) && !empty($box['height'])) {
+                // The widget sits at the form's box, so the form fills it and its fields are placed (in %) inside that box.
+                $dimensions = [
+                    'width' => (float) $box['width'],
+                    'height' => (float) $box['height'],
+                    'offsetX' => (float) ($box['x'] ?? 0),
+                    'offsetY' => (float) ($box['y'] ?? 0),
+                    'fontWidth' => $this->elementor_canvas_width,
+                ];
+                $html = '<div style="position:relative;width:100%;height:' . round((float) $box['height'], 2) . 'px">' . $this->render_node($node, $dimensions) . '</div>';
+            }
+            return $this->apply_elementor_geometry(['id' => $id, 'elType' => 'widget', 'widgetType' => 'html', 'settings' => ['html' => $html], 'elements' => []], $node, $parent_bbox);
         }
-        $elementor_settings = [
-            'flex_direction' => (($settings['direction'] ?? '') === 'row' ? 'row' : 'column'),
-            'content_width' => 'full',
-            'gap' => ['unit' => 'px', 'size' => absint($settings['gap'] ?? 0)],
-        ];
-        if (!empty($style['background'])) {
-            $elementor_settings['background_background'] = 'classic';
-            $elementor_settings['background_color'] = $this->normalize_color($style['background']);
-        } elseif (!empty($node['background'])) {
-            $elementor_settings['background_background'] = 'classic';
-            $elementor_settings['background_color'] = $this->normalize_color($node['background']);
-        }
+        $elementor_settings = $this->elementor_plate_settings($style, $node, (($settings['direction'] ?? '') === 'row' ? 'row' : 'column'))
+            + ['flex_gap' => $this->elementor_gap(absint($settings['gap'] ?? 0))];
         $model = [
             'id' => $id,
             'elType' => 'container',
@@ -1018,6 +1136,88 @@ final class Page_Generator_Plugin {
             }, $children),
         ];
         return $this->apply_elementor_geometry($model, $node, $parent_bbox);
+    }
+
+    private function elementor_gap($pixels) {
+        return ['unit' => 'px', 'column' => (string) $pixels, 'row' => (string) $pixels, 'isLinked' => true];
+    }
+
+    private function elementor_box_values($pixels) {
+        $value = (string) $pixels;
+        return ['unit' => 'px', 'top' => $value, 'right' => $value, 'bottom' => $value, 'left' => $value, 'isLinked' => true];
+    }
+
+    // Typography controls shared by the heading, text-editor and button widgets (size, weight and face come from the screenshot).
+    private function elementor_typography($style, $settings) {
+        $out = [];
+        $font = $style['fontSize'] ?? ($settings['fontSize'] ?? null);
+        if (is_numeric($font) && $font > 0) {
+            $out['typography_typography'] = 'custom';
+            $out['typography_font_size'] = ['unit' => 'px', 'size' => max(10, absint($font)), 'sizes' => []];
+            $out['typography_line_height'] = ['unit' => 'em', 'size' => 1.2, 'sizes' => []];
+        }
+        if (!empty($style['fontWeight'])) {
+            $out['typography_typography'] = 'custom';
+            $out['typography_font_weight'] = (string) absint($style['fontWeight']);
+        }
+        if (($style['fontFamily'] ?? '') === 'serif') {
+            $out['typography_typography'] = 'custom';
+            $out['typography_font_family'] = 'Georgia';
+        }
+        return $out;
+    }
+
+    private function elementor_text_widget($id, $type, $label, $style, $settings, $text_color, $has_plate) {
+        $has_color = !empty($style['color']);
+        $nowrap = strpos($label, "\n") === false;
+        $common = [
+            '_margin' => $this->elementor_box_values(0),
+            '_padding' => $this->elementor_box_values(0),
+            '_css_classes' => 'pg-el-text' . ($nowrap ? ' pg-nowrap' : '') . ($type === 'link' ? ' pg-link' : ''),
+        ] + $this->elementor_typography($style, $settings);
+        if ($type === 'heading') {
+            $widget_settings = ['title' => wp_kses_post($label)] + $common;
+            if ($has_color) $widget_settings['title_color'] = $text_color;
+            return ['id' => $id, 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => $widget_settings, 'elements' => []];
+        }
+        $widget_settings = ['editor' => '<p>' . nl2br(esc_html($label)) . '</p>'] + $common;
+        if ($has_color) $widget_settings['text_color'] = $text_color;
+        if ($has_plate) $widget_settings['align'] = 'center';
+        return ['id' => $id, 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => $widget_settings, 'elements' => []];
+    }
+
+    // Container controls for a filled/bordered surface: no padding, fill, border, radius, shadow.
+    private function elementor_plate_settings($style, $node, $direction) {
+        $out = [
+            'flex_direction' => $direction,
+            'content_width' => 'full',
+            'padding' => $this->elementor_box_values(0),
+        ];
+        $fill = $style['background'] ?? ($node['background'] ?? '');
+        if ($fill) {
+            $out['background_background'] = 'classic';
+            $out['background_color'] = $this->normalize_color($fill);
+        }
+        if (!empty($style['borderRadius'])) {
+            $out['border_radius'] = $this->elementor_box_values(absint($style['borderRadius']));
+        }
+        $border_width = absint($style['borderWidth'] ?? 0);
+        if (!empty($style['borderColor']) && $border_width) {
+            $out['border_border'] = 'solid';
+            $out['border_width'] = $this->elementor_box_values($border_width);
+            $out['border_color'] = $this->normalize_color($style['borderColor']);
+        }
+        $accent_width = absint($style['accentWidth'] ?? 0);
+        if (!empty($style['accentColor']) && $accent_width && empty($style['shadow'])) {
+            // One border colour per container in Elementor, so the coloured left edge is an inset shadow.
+            $out['box_shadow_box_shadow_type'] = 'yes';
+            $out['box_shadow_box_shadow_position'] = 'inset';
+            $out['box_shadow_box_shadow'] = ['horizontal' => $accent_width, 'vertical' => 0, 'blur' => 0, 'spread' => 0, 'color' => $this->normalize_color($style['accentColor'])];
+        } elseif (!empty($style['shadow'])) {
+            $out['box_shadow_box_shadow_type'] = 'yes';
+            $out['box_shadow_box_shadow'] = ['horizontal' => 0, 'vertical' => 2, 'blur' => 10, 'spread' => 0, 'color' => 'rgba(15,23,42,.08)'];
+        }
+        return $out;
     }
 
     private function apply_elementor_geometry($model, $node, $parent_bbox) {
@@ -1051,6 +1251,12 @@ final class Page_Generator_Plugin {
         } else {
             $model['settings']['_element_width'] = 'initial';
             $model['settings']['_element_custom_width'] = $width;
+        }
+        if (($model['widgetType'] ?? '') === 'image') {
+            // The picture fills its box like object-fit:cover does in the block output; without a height it keeps its own proportions.
+            $model['settings']['width'] = ['unit' => '%', 'size' => 100, 'sizes' => []];
+            $model['settings']['height'] = ['unit' => 'px', 'size' => max(1, round((float) ($bbox['height'] ?? 0), 2)), 'sizes' => []];
+            $model['settings']['object-fit'] = 'cover';
         }
         if ($container) {
             $model['settings']['min_height'] = [
