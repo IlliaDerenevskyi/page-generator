@@ -1,0 +1,66 @@
+{
+  "azure-node-service.png": {
+    "visual": 92.23,
+    "perceptual": 97.6,
+    "content": 86.47,
+    "worstZone": 64,
+    "text": 100,
+    "dom": 97.18
+  },
+  "github-repo.png": {
+    "visual": 94.13,
+    "perceptual": 98.24,
+    "content": 55.83,
+    "worstZone": 0,
+    "text": 100,
+    "dom": 73.78
+  },
+  "lab6.png": {
+    "visual": 93.1,
+    "perceptual": 97.39,
+    "content": 73.4,
+    "worstZone": 11,
+    "text": 97.43,
+    "dom": 83.8
+  },
+  "nodejs-org.png": {
+    "visual": 85.97,
+    "perceptual": 95.82,
+    "content": 60.03,
+    "worstZone": 26,
+    "text": 99.12,
+    "dom": 86.75
+  },
+  "notion-login.png": {
+    "visual": 96.69,
+    "perceptual": 98.79,
+    "content": 40.35,
+    "worstZone": 21,
+    "text": 98.28,
+    "dom": 86.49
+  },
+  "apple-ua.png": {
+    "visual": 84.34,
+    "perceptual": 87.68,
+    "content": 73.98,
+    "worstZone": 24,
+    "text": 98.65,
+    "dom": 80.95
+  },
+  "stripe.png": {
+    "visual": 87.51,
+    "perceptual": 97.4,
+    "content": 85.32,
+    "worstZone": 35,
+    "text": 100,
+    "dom": 97.39
+  },
+  "wikipedia-article.png": {
+    "visual": 82.97,
+    "perceptual": 95.74,
+    "content": 74.39,
+    "worstZone": 29,
+    "text": 100,
+    "dom": 99.69
+  }
+}

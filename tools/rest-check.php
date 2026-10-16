@@ -2,6 +2,11 @@
 // Smoke test for the REST API (page-generator/v1): permissions, schema GET/PUT round-trip, validation and export targets.
 // Overwrites the content of the page it is pointed at, so use a scratch page that already has a saved schema:
 //   WP_LOAD=/srv/http/wordpress/wp-load.php PG_POST=2 php rest-check.php
+// Command line only: this script acts as user 1 and rewrites a page, so it must never answer a web request.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(404);
+    exit;
+}
 define('WP_USE_THEMES', false);
 require getenv('WP_LOAD') ?: dirname(__DIR__, 4) . '/wp-load.php';
 $post = (int) (getenv('PG_POST') ?: 2);

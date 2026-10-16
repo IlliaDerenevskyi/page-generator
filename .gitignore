@@ -4,3 +4,7 @@
 tools/.browsers/
 node_modules/
 tools/node_modules/
+
+# development session cookies and run output
+tools/.cookies.json
+tools/results/

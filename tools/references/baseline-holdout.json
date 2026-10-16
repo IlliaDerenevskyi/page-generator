@@ -1,0 +1,74 @@
+{
+  "bootstrap.png": {
+    "visual": 66.63,
+    "perceptual": 93.35,
+    "content": 51.13,
+    "worstZone": 26,
+    "text": 97.5,
+    "dom": 85.94
+  },
+  "diia.png": {
+    "visual": 78.37,
+    "perceptual": 93,
+    "content": 64.5,
+    "worstZone": 1,
+    "text": 100,
+    "dom": 89.22
+  },
+  "django.png": {
+    "visual": 88.15,
+    "perceptual": 97.15,
+    "content": 66.2,
+    "worstZone": 1,
+    "text": 100,
+    "dom": 90.7
+  },
+  "hacker-news.png": {
+    "visual": 65.07,
+    "perceptual": 95.96,
+    "content": 78.92,
+    "worstZone": 9,
+    "text": 100,
+    "dom": 70.71
+  },
+  "mdn-flexbox.png": {
+    "visual": 86.19,
+    "perceptual": 94.8,
+    "content": 43.93,
+    "worstZone": 0,
+    "text": 100,
+    "dom": 90.96
+  },
+  "python-docs.png": {
+    "visual": 85.76,
+    "perceptual": 97.25,
+    "content": 48.89,
+    "worstZone": 7,
+    "text": 100,
+    "dom": 96.51
+  },
+  "python-org.png": {
+    "visual": 78.85,
+    "perceptual": 93.96,
+    "content": 71.11,
+    "worstZone": 15,
+    "text": 100,
+    "dom": 93.18
+  },
+  "ukr-net.png": {
+    "visual": 62.49,
+    "perceptual": 84.82,
+    "content": 36.81,
+    "worstZone": 0,
+    "text": 99.8,
+    "dom": 93.81
+  },
+  "vuejs.png": {
+    "visual": 91.81,
+    "perceptual": 96.46,
+    "content": 24.62,
+    "worstZone": 0,
+    "text": 96.46,
+    "dom": 76.88
+  }
+}

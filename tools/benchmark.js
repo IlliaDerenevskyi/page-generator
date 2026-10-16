@@ -2,9 +2,12 @@
 // Reference screenshot benchmark: builds a page from every PNG in a folder, reads the plugin's own comparison
 // metrics and compares them with a stored baseline, so each change is checked with a single command.
 //
-//   node benchmark.js <screenshots-dir> [--baseline baseline.json] [--out results.json] [--update-baseline]
+//   node benchmark.js [<screenshots-dir>] [--baseline baseline.json] [--out results.json] [--update-baseline] [--holdout [--details]]
 //
-// Environment: PG_COOKIES (JSON file with wp-admin cookies, required), PG_POST (test post id, default 2),
+// With no directory it runs the tuning set (references/desktop and references/heavy) against references/baseline.json;
+// with --holdout it runs references/holdout against baseline-holdout.json and prints only averages (see references/README.md).
+//
+// Environment: PG_COOKIES (JSON file with wp-admin cookies, default .cookies.json, made by dev-cookies.php), PG_POST (test post id, default 2),
 // PG_URL (site origin, default http://localhost), PG_CHROMIUM (browser binary, default /usr/bin/chromium).
 const fs = require('fs');
 const path = require('path');
@@ -73,6 +76,21 @@ function formatReport(rows) {
     return lines.join('\n');
 }
 
+// Mean of each gated metric over a set, and how many files regressed or are new: the only thing printed for the hold-out set.
+function formatSummary(rows) {
+    const counted = rows.filter((row) => GATED.every((key) => typeof row.metrics[key] === 'number'));
+    const lines = [`${counted.length} of ${rows.length} files measured`];
+    for (const key of GATED) {
+        const values = counted.map((row) => row.metrics[key]);
+        const mean = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+        const previous = counted.filter((row) => row.deltas[key] !== undefined);
+        const drift = previous.length ? previous.reduce((sum, row) => sum + row.deltas[key], 0) / previous.length : null;
+        lines.push(`  ${key.padEnd(11)} mean ${mean.toFixed(2)}${drift === null ? '' : `  (${drift >= 0 ? '+' : ''}${drift.toFixed(2)} vs baseline)`}`);
+    }
+    lines.push(`  regressed: ${rows.filter((row) => row.regressed).length}, new: ${rows.filter((row) => row.isNew).length}`);
+    return lines.join('\n');
+}
+
 async function buildAndCompare(browser, file, options) {
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     await context.addCookies(JSON.parse(fs.readFileSync(options.cookies, 'utf8')));
@@ -106,27 +124,33 @@ async function main(argv) {
         const index = args.indexOf(name);
         return index === -1 ? null : args.splice(index, 2)[1];
     };
-    const baselinePath = flag('--baseline');
+    const references = path.join(__dirname, 'references');
+    const baselineFlag = flag('--baseline');
     const outPath = flag('--out');
     const update = args.includes('--update-baseline');
+    const holdout = args.includes('--holdout');
+    const details = args.includes('--details');
     const dir = args.find((arg) => !arg.startsWith('--'));
-    if (!dir || !process.env.PG_COOKIES) {
-        console.error('Usage: PG_COOKIES=cookies.json node benchmark.js <screenshots-dir> [--baseline f.json] [--out f.json] [--update-baseline]');
+    const baselinePath = baselineFlag || (dir ? null : path.join(references, holdout ? 'baseline-holdout.json' : 'baseline.json'));
+    const cookies = process.env.PG_COOKIES || path.join(__dirname, '.cookies.json');
+    if (!fs.existsSync(cookies)) {
+        console.error('No cookies file. Run `php dev-cookies.php` (or set PG_COOKIES to a JSON file with wp-admin cookies).');
         process.exit(2);
     }
     const options = {
-        cookies: process.env.PG_COOKIES,
+        cookies,
         post: process.env.PG_POST || '2',
         url: process.env.PG_URL || 'http://localhost',
     };
-    const files = fs.readdirSync(dir).filter((name) => /\.png$/i.test(name)).sort();
+    const dirs = dir ? [dir] : (holdout ? ['holdout'] : ['desktop', 'heavy']).map((name) => path.join(references, name));
+    const files = dirs.flatMap((folder) => fs.readdirSync(folder).filter((name) => /\.png$/i.test(name)).sort().map((name) => ({ name, file: path.join(folder, name) })));
     const { chromium } = require('playwright');
     const browser = await chromium.launch({ headless: true, executablePath: process.env.PG_CHROMIUM || '/usr/bin/chromium' });
     const results = {};
     try {
-        for (const name of files) {
+        for (const { name, file } of files) {
             process.stderr.write(`→ ${name}\n`);
-            results[name] = await buildAndCompare(browser, path.join(dir, name), options).catch((error) => {
+            results[name] = await buildAndCompare(browser, file, options).catch((error) => {
                 process.stderr.write(`  помилка: ${error.message}\n`);
                 return {};
             });
@@ -136,7 +160,8 @@ async function main(argv) {
     }
     const baseline = baselinePath && fs.existsSync(baselinePath) ? JSON.parse(fs.readFileSync(baselinePath, 'utf8')) : {};
     const rows = compareToBaseline(results, baseline);
-    console.log(formatReport(rows));
+    // The hold-out set exists to measure how well the plugin does on pages nobody tuned it on; per-file numbers would invite tuning to them.
+    console.log(holdout && !details ? formatSummary(rows) : formatReport(rows));
     if (outPath) {
         fs.writeFileSync(outPath, JSON.stringify(results, null, 2));
     }
@@ -159,4 +184,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { parseMetrics, compareToBaseline, formatReport };
+module.exports = { parseMetrics, compareToBaseline, formatReport, formatSummary };

@@ -2,7 +2,10 @@
   "private": true,
   "scripts": {
     "install-browsers": "playwright install chromium",
-    "test": "node --test"
+    "test": "node --test",
+    "bench": "node benchmark.js",
+    "bench:update": "node benchmark.js --update-baseline",
+    "bench:holdout": "node benchmark.js --holdout"
   },
   "dependencies": {
     "playwright": "^1.52.0",

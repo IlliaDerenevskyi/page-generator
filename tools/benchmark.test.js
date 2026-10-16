@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { parseMetrics, compareToBaseline } = require('./benchmark');
+const { parseMetrics, compareToBaseline, formatSummary } = require('./benchmark');
 
 test('parseMetrics reads the four similarity values from the status text', () => {
     const status = 'Page оновлено.Візуальна відповідність: 74.38%Перцептивна відповідність: 82.81%Текстова відповідність: 97.53%DOM-відповідність: 93.96%Reference: 1392x2560';
@@ -35,4 +35,16 @@ test('compareToBaseline does not treat a lower DOM ratio or worst zone as a regr
     assert.strictEqual(rows[0].deltas.dom, -20);
     const missingZone = compareToBaseline({ a: { visual: 80, perceptual: 80, content: 40, text: 99, dom: 90 } }, baseline);
     assert.strictEqual(missingZone[0].regressed, false);
+});
+
+test('formatSummary prints averages and counts, never a per-file line', () => {
+    const rows = compareToBaseline({
+        a: { visual: 80, perceptual: 90, content: 50, text: 99 },
+        b: { visual: 60, perceptual: 70, content: 30, text: 97 },
+    }, { a: { visual: 82, perceptual: 90, content: 50, text: 99 } });
+    const text = formatSummary(rows);
+    assert.match(text, /2 of 2 files measured/);
+    assert.match(text, /visual\s+mean 70\.00/);
+    assert.match(text, /regressed: 1, new: 1/);
+    assert.ok(!/\ba\b|\bb\b/.test(text.replace(/regressed|measured|files|baseline|mean|new/g, '')), 'file names must not appear');
 });
