@@ -15,7 +15,9 @@
         if (BRIDGED.indexOf(name) === -1) return settings;
         settings.attributes = Object.assign({}, settings.attributes, {
             pgBox: { type: 'object' },
-            pgCanvas: { type: 'object' }
+            pgCanvas: { type: 'object' },
+            pgFlow: { type: 'object' },
+            pgId: { type: 'string' }
         });
         return settings;
     });

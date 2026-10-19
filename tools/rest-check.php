@@ -70,6 +70,35 @@ $call('PUT', $route, ['schema' => $base, 'layout' => 'pixel', 'editorMode' => 'e
 $check('layout=pixel brings the Elementor canvas back', strpos(get_post_meta($post, '_elementor_data', true), 'pg-el-flow') === false);
 $call('PUT', $route, ['schema' => $base, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
 
+// Gradients: a detected linear gradient reaches both exporters (CSS for blocks, native gradient settings for Elementor).
+$with_gradient = $base;
+$with_gradient['sections'][0]['style'] = array_merge((array) ($with_gradient['sections'][0]['style'] ?? []), ['gradient' => ['type' => 'linear', 'angle' => 135, 'stops' => [['pos' => 0, 'color' => '#6a11cb'], ['pos' => 100, 'color' => '#2575fc']]]]);
+$check('a gradient is accepted', $call('PUT', $route, ['schema' => $with_gradient])->get_status() === 200);
+$check('blocks carry the gradient as CSS', strpos(get_post($post)->post_content, 'linear-gradient(135deg,#6a11cb 0%,#2575fc 100%)') !== false);
+$call('PUT', $route, ['schema' => $with_gradient, 'editorMode' => 'elementor']);
+$check('Elementor gets a native gradient background', strpos(get_post_meta($post, '_elementor_data', true), 'background_gradient_type') !== false);
+
+// Backdrop picture: a soft mesh/radial background cut from the screenshot is a background image in every output.
+$with_backdrop = $base;
+$with_backdrop['sections'][0]['style'] = array_merge((array) ($with_backdrop['sections'][0]['style'] ?? []), ['backgroundImage' => ['url' => 'http://localhost/wp-content/uploads/backdrop-test.jpg', 'attachmentId' => 0]]);
+$check('a backdrop picture is accepted', $call('PUT', $route, ['schema' => $with_backdrop])->get_status() === 200);
+$check('blocks carry the backdrop as a background image', strpos(get_post($post)->post_content, 'backdrop-test.jpg') !== false && strpos(get_post($post)->post_content, '"backgroundSize":"cover"') !== false);
+$call('PUT', $route, ['schema' => $with_backdrop, 'editorMode' => 'elementor']);
+$check('Elementor gets the backdrop as a background image', strpos(get_post_meta($post, '_elementor_data', true), 'backdrop-test.jpg') !== false);
+$call('PUT', $route, ['schema' => $base, 'editorMode' => 'gutenberg']);
+
+// Required fields: the flag reaches the built-in form (HTML required + a red asterisk), and Elementor's HTML widget.
+$required_schema = $base;
+$field = function ($label, $required, $y) { return ['id' => 'f' . $y, 'type' => 'form-field', 'fieldType' => 'text', 'label' => $label, 'placeholder' => '', 'required' => $required, 'bbox' => ['x' => 40, 'y' => $y, 'width' => 300, 'height' => 40], 'settings' => ['x' => 40, 'y' => $y, 'width' => 300, 'height' => 40], 'children' => [], 'elements' => []]; };
+$required_schema['sections'][0]['children'] = [['id' => 'frm', 'type' => 'form', 'bbox' => ['x' => 0, 'y' => 0, 'width' => 400, 'height' => 200], 'settings' => ['x' => 0, 'y' => 0, 'width' => 400, 'height' => 200], 'children' => [$field('Email', true, 40), $field('Name', false, 110)], 'elements' => []]];
+$required_schema['sections'][0]['elements'] = $required_schema['sections'][0]['children'];
+$check('a form with a required field is accepted', $call('PUT', $route, ['schema' => $required_schema, 'forms' => 'custom'])->get_status() === 200);
+$html = do_blocks(get_post($post)->post_content);
+$check('the required field is marked in the built-in form', substr_count($html, ' required aria-required="true"') === 1 && strpos($html, 'page-generator-required') !== false);
+$call('PUT', $route, ['schema' => $required_schema, 'forms' => 'custom', 'editorMode' => 'elementor']);
+$check('Elementor keeps the required field', substr_count(get_post_meta($post, '_elementor_data', true), 'aria-required') === 1);
+$call('PUT', $route, ['schema' => $schema]);
+
 // WPForms export: one form per detected form, reused on the next build instead of piling up duplicates.
 if (post_type_exists('wpforms')) {
     $has_form = false;
@@ -88,4 +117,48 @@ if (post_type_exists('wpforms')) {
         echo "skip WPForms checks: the page has no form\n";
     }
 }
+
+// Two-way bridge: edits made to the saved blocks come back into the schema.
+$text = function ($id, $label, $y, $extra = []) { return ['id' => $id, 'type' => 'text', 'text' => $label, 'content' => $label, 'bbox' => ['x' => 40, 'y' => $y, 'width' => 300, 'height' => 30], 'settings' => ['x' => 40, 'y' => $y, 'width' => 300, 'height' => 30, 'fontSize' => 20], 'style' => ['fontSize' => 20, 'color' => '#111111'] + $extra, 'children' => [], 'elements' => []]; };
+$kids = [
+    $text('t1', 'Hello', 40),
+    $text('t2', 'Delete me', 90),
+    ['id' => 'b1', 'type' => 'button', 'text' => 'Buy', 'content' => 'Buy', 'bbox' => ['x' => 40, 'y' => 140, 'width' => 120, 'height' => 44], 'settings' => ['x' => 40, 'y' => 140, 'width' => 120, 'height' => 44], 'style' => ['background' => '#2563eb', 'color' => '#ffffff', 'borderRadius' => 8], 'behavior' => ['type' => 'link', 'url' => 'https://example.com/'], 'children' => [], 'elements' => []],
+];
+$sync_schema = ['version' => 2, 'title' => 'Sync', 'sections' => [['id' => 's1', 'type' => 'section', 'settings' => ['sourceWidth' => 1000, 'sourceHeight' => 400, 'direction' => 'column', 'gap' => 16], 'bbox' => ['x' => 0, 'y' => 0, 'width' => 1000, 'height' => 400], 'style' => ['background' => '#ffffff'], 'children' => $kids, 'elements' => $kids]]];
+$call('PUT', $route, ['schema' => $sync_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
+$content = get_post($post)->post_content;
+$check('every block carries its node id', strpos($content, '"pgId":"t1"') !== false && strpos($content, '"pgId":"b1"') !== false && strpos($content, '"pgId":"s1"') !== false);
+$node = function ($id) use ($call, $route) {
+    $found = null;
+    $walk = function ($nodes) use (&$walk, &$found, $id) { foreach ((array) $nodes as $n) { if (is_array($n) && ($n['id'] ?? '') === $id) $found = $n; if (is_array($n)) $walk($n['children'] ?? []); } };
+    $walk($call('GET', $route)->get_data()['schema']['sections']);
+    return $found;
+};
+$edited = str_replace('>Hello<', '>Hello world<', $content);
+$edited = preg_replace('/("pgId":"t1","pgBox":\{"x":)40/', '${1}95', $edited, 1, $moved);
+$edited = str_replace('#111111', '#ff0000', $edited);
+$edited = str_replace('>Buy<', '>Buy now<', $edited);
+$edited = preg_replace('#<!-- wp:paragraph \{[^}]*"pgId":"t2".*?<!-- /wp:paragraph -->\s*#s', '', $edited, 1, $deleted);
+$edited = preg_replace('#(</div>\s*<!-- /wp:group -->\s*</div>\s*<!-- /wp:group -->)#', "<!-- wp:paragraph -->\n<p>Brand new</p>\n<!-- /wp:paragraph -->\n\n\$1", $edited, 1, $added);
+$check('the test edits were applied to the content', $moved === 1 && $deleted === 1 && $added === 1);
+wp_update_post(['ID' => $post, 'post_content' => wp_slash($edited)]);
+$t1 = $node('t1');
+$check('edited text reaches the schema', ($t1['text'] ?? '') === 'Hello world' && ($t1['content'] ?? '') === 'Hello world');
+$check('a moved block updates its box', (int) ($t1['bbox']['x'] ?? 0) === 95 && (int) ($t1['settings']['x'] ?? 0) === 95);
+$check('a recoloured block updates its colour', ($t1['style']['color'] ?? '') === '#ff0000');
+$check('an untouched property is kept', (int) ($t1['style']['fontSize'] ?? 0) === 20 && (int) ($t1['bbox']['y'] ?? 0) === 40);
+$check('button text is read from the inner button', ($node('b1')['text'] ?? '') === 'Buy now' && ($node('b1')['behavior']['url'] ?? '') === 'https://example.com/');
+$check('a deleted block removes its node', $node('t2') === null);
+$new = null;
+foreach ($call('GET', $route)->get_data()['schema']['sections'][0]['children'] as $child) if (($child['text'] ?? '') === 'Brand new') $new = $child;
+$check('a new block becomes a node', $new !== null && ($new['type'] ?? '') === 'text');
+$check('the new block received its id in the content', $new !== null && strpos(get_post($post)->post_content, '"pgId":"' . $new['id'] . '"') !== false);
+$call('PUT', $route, ['schema' => $call('GET', $route)->get_data()['schema'], 'layout' => 'pixel']);
+$rebuilt = get_post($post)->post_content;
+$check('rebuilding from the merged schema keeps the edits', strpos($rebuilt, 'Hello world') !== false && strpos($rebuilt, 'Delete me') === false && strpos($rebuilt, 'Brand new') !== false);
+$before_hash = md5(get_post_meta($post, '_page_generator_schema', true));
+wp_update_post(['ID' => $post, 'post_content' => wp_slash($rebuilt)]);
+$check('saving unchanged blocks leaves the schema alone', md5(get_post_meta($post, '_page_generator_schema', true)) === $before_hash);
+$call('PUT', $route, ['schema' => $schema]);
 exit($failed ? 1 : 0);

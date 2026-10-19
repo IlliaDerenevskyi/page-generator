@@ -6,6 +6,21 @@ close the result is to the screenshot.
 
 ## Run
 
+Two ways, same numbers (checked: all 9 hold-out pages gave identical results in both):
+
+**Through the Playwright MCP (preferred, the browser is visible and can be inspected between steps):**
+
+```
+php dev-cookies.php                          # once per 12 hours (writes tools/.cookies.json)
+php mcp-make.php references/holdout          # or references/desktop, references/heavy, or one .png: writes tools/.mcp-run.js
+# run it with the MCP tool browser_run_code_unsafe, filename = tools/.mcp-run.js; it returns one JSON line per screenshot
+# save those lines to a file, then:
+node mcp-compare.js results.jsonl [--holdout [--details]] [--update-baseline]
+php mcp-make.php <png> schema                # same, but returns the section list with styles instead of the metrics (debugging)
+```
+
+**Headless, no MCP (CI-style):**
+
 ```
 php dev-cookies.php          # once per 12 hours: wp-admin cookies for the headless browser (writes tools/.cookies.json)
 npm run bench                # all references; compares with references/baseline.json, exit 1 on a regression
@@ -17,6 +32,9 @@ node benchmark.js <dir> [--baseline f.json] [--out results.json]   # any other f
 Needs a WordPress site with the plugin active (`PG_URL`, default `http://localhost`), a page to rebuild (`PG_POST`, default `2`:
 the run **overwrites its content**, so use a scratch page), Chromium (`PG_CHROMIUM`, default `/usr/bin/chromium`) and
 `npm install` in this folder. Do not edit plugin files while it runs: the numbers would mix two versions.
+
+Script and stylesheet URLs carry the file's modification time (`asset_version()`), so an edited `editor.js` or `detectors.js` is
+fetched fresh; before that, a browser that kept its cache between runs (the MCP one does) measured the previous code.
 
 ## Two sets: tuning and hold-out
 
@@ -49,6 +67,9 @@ grid cell) and `dom` (a node count that grows when a new element is found) are p
 | | `lab6` | a plain responsive site: cards, table, form (the "Акустична варта" page) |
 | | `nodejs-org` | large headings, dark/light bands |
 | | `notion-login` | a single outlined email field, buttons |
+| | `gradients-css` | **synthetic** page of our own (source: `gradients-css.html`): CSS linear gradients on a hero, cards and a band; guards the gradient detector and both exporters |
+| | `backdrops-css` | **synthetic** page of our own (source: `backdrops-css.html`): a mesh-gradient hero and a radial-gradient band; guards the soft-backdrop detector (background cut out as a picture, text removed) |
+| | `form-required` | **synthetic** page of our own (source: `form-required.html`): a contact form with two fields marked `*`; guards the required-field flag |
 | `heavy/` | `apple-ua` | photographic sections, long page |
 | | `stripe` | gradients, baked-in text, product mockups |
 | | `wikipedia-article` | very small text, serif headings, infobox |

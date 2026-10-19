@@ -423,3 +423,70 @@ test('classifyTypeface tells thick-stem thin-stroke glyphs (serif) from uniform 
     assert.strictEqual(classifyTypeface(serif.data, serif.width, serif.box, false).serif, true);
     assert.strictEqual(classifyTypeface(sans.data, sans.width, { x: 0, y: 0, width: 400, height: 6 }, false), null);
 });
+
+test('detectLinearGradient finds the direction and end colours of a ramp, and nothing in flat, photographic or text-covered areas', () => {
+    const { detectLinearGradient } = require('../assets/detectors');
+    const make = (width, height, colorAt) => {
+        const data = new Uint8ClampedArray(width * height * 4);
+        for (let y = 0; y < height; y += 1) {
+            for (let x = 0; x < width; x += 1) {
+                data.set([...colorAt(x / (width - 1), y / (height - 1), x, y), 255], (y * width + x) * 4);
+            }
+        }
+        return data;
+    };
+    const mix = (a, b, t) => a.map((v, i) => Math.round(v + (b[i] - v) * t));
+    const box = (width, height) => ({ x: 0, y: 0, width, height });
+    const horizontal = detectLinearGradient(make(600, 240, (u) => mix([250, 240, 255], [160, 120, 250], u)), 600, 240, box(600, 240));
+    assert.strictEqual(horizontal.angle, 90);
+    assert.strictEqual(horizontal.stops.length, 2);
+    assert.ok(horizontal.stops[0].color.startsWith('#fa') && horizontal.stops[1].color.startsWith('#a0') || Math.abs(parseInt(horizontal.stops[1].color.slice(1, 3), 16) - 160) < 12);
+    const vertical = detectLinearGradient(make(600, 300, (u, v) => mix([255, 255, 255], [40, 60, 120], v)), 600, 300, box(600, 300));
+    assert.strictEqual(vertical.angle, 180);
+    // CSS 135deg is a true 45-degree slope in pixels, whatever the box's proportions
+    const slope = (x, y) => ((x - 300) * Math.SQRT1_2 + (y - 150) * Math.SQRT1_2) / ((600 + 300) * Math.SQRT1_2) + .5;
+    const diagonal = detectLinearGradient(make(600, 300, (u, v, x, y) => mix([255, 200, 200], [100, 100, 255], slope(x, y))), 600, 300, box(600, 300));
+    assert.strictEqual(diagonal.angle, 135);
+    // dark text-like marks over the ramp do not break the fit
+    const marked = detectLinearGradient(make(600, 240, (u, v, x, y) => (y % 40 < 6 && x % 70 < 50 ? [20, 20, 20] : mix([250, 240, 255], [160, 120, 250], u))), 600, 240, box(600, 240));
+    assert.strictEqual(marked && marked.angle, 90);
+    assert.strictEqual(detectLinearGradient(make(600, 240, () => [240, 244, 250]), 600, 240, box(600, 240)), null);
+    let seed = 7;
+    const noise = make(600, 240, () => { seed = (seed * 16807) % 2147483647; return [seed % 256, (seed >> 3) % 256, (seed >> 6) % 256]; });
+    assert.strictEqual(detectLinearGradient(noise, 600, 240, box(600, 240)), null);
+    assert.strictEqual(detectLinearGradient(make(100, 30, (u) => mix([0, 0, 0], [255, 255, 255], u)), 100, 30, box(100, 30)), null, 'too small to judge');
+});
+
+test('detectBackdrop reads a soft radial backdrop and fills in the foreground', () => {
+    const { detectBackdrop } = require('../assets/detectors');
+    const W = 800, H = 400;
+    const make = (fn) => { const d = new Uint8ClampedArray(W * H * 4); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const c = fn(x, y); const o = (y * W + x) * 4; d[o] = c[0]; d[o + 1] = c[1]; d[o + 2] = c[2]; d[o + 3] = 255; } return d; };
+    const radial = (x, y) => { const t = Math.min(1, Math.hypot(x - 300, y - 150) / 500); return [Math.round(250 - 200 * t), Math.round(120 + 40 * t), Math.round(60 + 160 * t)]; };
+    const box = { x: 0, y: 0, width: W, height: H };
+    const plain = make(radial);
+    const grid = detectBackdrop(plain, W, H, box, [], false);
+    assert.ok(grid && grid.cols > 10 && grid.rows > 5);
+    // A white headline over the middle: masked, the backdrop underneath is still the radial colour.
+    const withText = make((x, y) => (x > 250 && x < 550 && y > 150 && y < 200) ? [255, 255, 255] : radial(x, y));
+    const masked = detectBackdrop(withText, W, H, box, [{ x: 250, y: 150, width: 300, height: 50 }], false);
+    assert.ok(masked);
+    const col = Math.floor(400 / masked.cell), row = Math.floor(175 / masked.cell);
+    const got = masked.pixels.slice((row * masked.cols + col) * 3, (row * masked.cols + col) * 3 + 3);
+    const want = radial(400, 175);
+    assert.ok(Math.abs(got[0] - want[0]) + Math.abs(got[1] - want[1]) + Math.abs(got[2] - want[2]) < 30);
+    assert.equal(detectBackdrop(make(() => [200, 210, 220]), W, H, box, [], false), null);
+    assert.equal(detectBackdrop(make((x) => (x < 400 ? [250, 250, 250] : [20, 30, 60])), W, H, box, [], false), null);
+    let seed = 7;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    assert.equal(detectBackdrop(make(() => [rnd() * 255, rnd() * 255, rnd() * 255]), W, H, box, [], false), null);
+    assert.equal(detectBackdrop(plain, W, 30, { x: 0, y: 0, width: W, height: 30 }, [], false), null);
+});
+
+test('splitRequiredMark turns a trailing asterisk into a flag', () => {
+    const { splitRequiredMark } = require('../assets/detectors');
+    assert.deepEqual(splitRequiredMark('Email *', ''), { label: 'Email', placeholder: '', required: true });
+    assert.deepEqual(splitRequiredMark('Ім’я*', 'Введіть ім’я'), { label: 'Ім’я', placeholder: 'Введіть ім’я', required: true });
+    assert.deepEqual(splitRequiredMark('', 'Телефон *'), { label: '', placeholder: 'Телефон', required: true });
+    assert.deepEqual(splitRequiredMark('Коментар', ''), { label: 'Коментар', placeholder: '', required: false });
+    assert.deepEqual(splitRequiredMark(undefined, undefined), { label: '', placeholder: '', required: false });
+});

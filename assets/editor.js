@@ -660,6 +660,9 @@
                 // The mobile screenshots become a second layout of the same page, shown below the mobile breakpoint.
                 schema.variants = { mobile: { sections: buildScreenshotPageSchema(split.mobile, $('#pg-source-description').val()).sections } };
             }
+            return uploadBackdrops(schema).then(function () { return { schema: schema, analyses: analyses }; });
+        }).then(function (built) {
+            var schema = built.schema, analyses = built.analyses;
             $('#page-generator-modal').data('schema', schema);
             $('#pg-output-actions').show();
             $('#pg-schema-tree').text(formatSchemaTree(schema));
@@ -681,6 +684,58 @@
         }).finally(function () {
             $('#pg-build-screenshot').prop('disabled', false);
         });
+    }
+
+    // Each detected backdrop grid is painted into a smooth picture (the grid is bilinearly stretched), uploaded, and replaced by its URL.
+    function uploadBackdrops(schema) {
+        var targets = [];
+        var collect = function (sections) {
+            (sections || []).forEach(function (section) {
+                if (section.style && section.style.backdrop) targets.push(section);
+            });
+        };
+        collect(schema.sections);
+        if (schema.variants && schema.variants.mobile) collect(schema.variants.mobile.sections);
+        return Promise.all(targets.map(function (section, index) {
+            var grid = section.style.backdrop;
+            delete section.style.backdrop;
+            return new Promise(function (resolve) {
+                var small = document.createElement('canvas');
+                small.width = grid.cols;
+                small.height = grid.rows;
+                var context = small.getContext('2d');
+                var image = context.createImageData(grid.cols, grid.rows);
+                for (var i = 0; i < grid.cols * grid.rows; i += 1) {
+                    image.data[i * 4] = grid.pixels[i * 3];
+                    image.data[i * 4 + 1] = grid.pixels[i * 3 + 1];
+                    image.data[i * 4 + 2] = grid.pixels[i * 3 + 2];
+                    image.data[i * 4 + 3] = 255;
+                }
+                context.putImageData(image, 0, 0);
+                var width = Math.min(960, Math.round(section.bbox.width / 2)), height = Math.max(8, Math.round(width * section.bbox.height / section.bbox.width));
+                var out = document.createElement('canvas');
+                out.width = width;
+                out.height = height;
+                var ctx = out.getContext('2d');
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.filter = 'blur(' + Math.max(2, Math.round(grid.cell / 4)) + 'px)';
+                ctx.drawImage(small, -grid.cell / 2, -grid.cell / 2, width + grid.cell, height + grid.cell);
+                out.toBlob(function (blob) {
+                    if (!blob) { resolve(); return; }
+                    var form = new FormData();
+                    form.append('action', 'page_generator_upload_asset');
+                    form.append('nonce', PageGeneratorConfig.nonce);
+                    form.append('asset', blob, 'detected-backdrop-' + index + '.jpg');
+                    $.ajax({ url: PageGeneratorConfig.ajaxUrl, method: 'POST', data: form, processData: false, contentType: false })
+                        .done(function (response) {
+                            if (response.success) section.style.backgroundImage = { url: response.data.url, attachmentId: response.data.id };
+                            resolve();
+                        })
+                        .fail(function () { resolve(); });
+                }, 'image/jpeg', .9);
+            });
+        }));
     }
 
     function analyzeScreenshot(file, uploadedData) {
@@ -1034,7 +1089,7 @@
                 box.kind = window.PageGeneratorDetectors.isPhotographic(pixelData, canvas.width, box) ? 'photo-candidate' : 'surface-candidate';
                 box.textLike = box.width < canvas.width * .55 && box.height < canvas.width * .18 && box.variance < 45;
                 box.rounded = estimateRoundedCorners(canvas, box);
-                box.gradient = estimateGradient(canvas, box);
+                box.gradient = window.PageGeneratorDetectors.detectLinearGradient(pixelData, canvas.width, canvas.height, box);
                 box.uniform = edgeUniformity(canvas, box);
                 return box;
             });
@@ -1269,16 +1324,6 @@
             return Math.abs(pixel[0] - center[0]) + Math.abs(pixel[1] - center[1]) + Math.abs(pixel[2] - center[2]) > 35;
         }).length;
         return different >= 2 ? 6 : 0;
-    }
-
-    function estimateGradient(canvas, box) {
-        if (box.width < 30) return null;
-        var context = canvas.getContext('2d', { willReadFrequently: true });
-        var y = Math.min(canvas.height - 1, box.y + Math.floor(box.height / 2));
-        var left = context.getImageData(Math.max(0, box.x + 3), y, 1, 1).data;
-        var right = context.getImageData(Math.min(canvas.width - 1, box.x + box.width - 4), y, 1, 1).data;
-        var difference = Math.abs(left[0] - right[0]) + Math.abs(left[1] - right[1]) + Math.abs(left[2] - right[2]);
-        return difference > 55 ? { type: 'linear', angle: 90 } : null;
     }
 
     function hexToRgb(value) {
@@ -1561,8 +1606,61 @@
         return normalizeHexColor(rgbToHex(inkColor), fallback);
     }
 
+    // Pixels of the whole screenshot, read once per analysis.
+    function analysisPixels(analysis) {
+        if (!analysis.pixels) {
+            analysis.pixels = analysis.canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, analysis.width, analysis.height).data;
+        }
+        return analysis.pixels;
+    }
+
+    // Everything that sits on a band's background (words, plates, pictures): these cells are not background.
+    function foregroundRects(analysis, top, height) {
+        var rects = [];
+        var add = function (box, pad) {
+            if (box.y + box.height < top || box.y > top + height) return;
+            rects.push({ x: box.x - pad, y: box.y - pad, width: box.width + pad * 2, height: box.height + pad * 2 });
+        };
+        (analysis.words || []).forEach(function (word) { add(word, 6); });
+        (analysis.surfaces || []).forEach(function (surface) { if (['button', 'badge', 'input'].indexOf(surface.kind) !== -1) add(surface, 4); });
+        // A "photo" spanning most of the band is the backdrop itself (the contour pass mistakes a busy gradient for a picture).
+        (analysis.boxes || []).forEach(function (box) { if (box.kind === 'photo-candidate' && (box.width < analysis.width * .8 || box.height < height * .8)) add(box, 2); });
+        return rects;
+    }
+
+    // Bands are cut wherever the colour changes, so a gradient background arrives as several slices. Neighbouring bands whose union is
+    // one linear ramp are joined back into a single band (the longest such run starting at each band).
+    function mergeGradientBands(analysis, bands) {
+        var tools = window.PageGeneratorDetectors;
+        var pixels = analysisPixels(analysis);
+        var merged = [];
+        var index = 0;
+        while (index < bands.length) {
+            var best = null;
+            for (var end = index + 1; end < bands.length && end < index + 8; end += 1) {
+                var previous = bands[end - 1];
+                if (Math.abs(bands[end].y - (previous.y + previous.height)) > 2) break;
+                var top = bands[index].y;
+                var height = bands[end].y + bands[end].height - top;
+                if (height < 120) continue;
+                var span = { x: 0, y: top, width: analysis.width, height: height };
+                var ramp = tools.detectLinearGradient(pixels, analysis.width, analysis.height, span)
+                    || tools.detectBackdrop(pixels, analysis.width, analysis.height, span, foregroundRects(analysis, top, height), true);
+                if (ramp) best = { end: end, y: top, height: height };
+            }
+            if (best) {
+                merged.push({ y: best.y, height: best.height, background: bands[index].background });
+                index = best.end + 1;
+            } else {
+                merged.push(bands[index]);
+                index += 1;
+            }
+        }
+        return merged;
+    }
+
     function splitIntoSections(analysis, semantic, uploadedData, textElements) {
-        var detected = (analysis.sections || []).filter(function (band) { return band.height >= analysis.width * .02; });
+        var detected = mergeGradientBands(analysis, (analysis.sections || []).filter(function (band) { return band.height >= analysis.width * .02; }));
         // A colour band can hold a whole page body (same background), so each band is also split at its own content gaps.
         var bands = detected.length < 2 ? deriveContentBands(semantic.elements, analysis) : detected.reduce(function (all, band) {
             var inside = semantic.elements.filter(function (node) {
@@ -1588,6 +1686,10 @@
                 return center >= band.y && center < band.y + band.height;
             });
             children = classifyStructuredContent(children, scopedText, analysis, type, band);
+            // A band that fades from one colour to another keeps its ramp (the solid background stays as the fallback).
+            var bandGradient = band.height >= 120 ? window.PageGeneratorDetectors.detectLinearGradient(analysisPixels(analysis), analysis.width, analysis.height, { x: 0, y: band.y, width: analysis.width, height: band.height }) : null;
+            // A soft multi-colour backdrop (mesh/radial) becomes a picture behind the section; the ramp above wins when one fits.
+            var backdrop = !bandGradient && band.height >= 160 ? window.PageGeneratorDetectors.detectBackdrop(analysisPixels(analysis), analysis.width, analysis.height, { x: 0, y: band.y, width: analysis.width, height: band.height }, foregroundRects(analysis, band.y, band.height), false) : null;
             return {
                 id: randomId(),
                 sourceGroup: analysis.sourceGroup,
@@ -1602,7 +1704,7 @@
                 background: band.background || semantic.background,
                 bands: [band],
                 bbox: { x: 0, y: band.y, width: analysis.width, height: band.height },
-                style: { background: band.background || semantic.background },
+                style: bandGradient ? { background: band.background || semantic.background, gradient: bandGradient } : (backdrop ? { background: band.background || semantic.background, backdrop: backdrop } : { background: band.background || semantic.background }),
                 behavior: { type: 'none' },
                 confidence: type === 'section' ? .55 : .72,
                 detection: { detectedBy: ['opencv', 'ocr', 'color-analysis', 'section-bands'], manual: false }
@@ -1990,12 +2092,18 @@
         return found;
     }
 
+    var splitRequiredMark = function (label, placeholder) { return window.PageGeneratorDetectors.splitRequiredMark(label, placeholder); };
+
     function makeControlNode(fieldType, label, placeholder, bbox, background) {
+        var marked = splitRequiredMark(label, placeholder);
+        label = marked.label;
+        placeholder = marked.placeholder;
         return {
             id: randomId(),
             type: 'form-field',
             fieldType: fieldType,
             role: 'form-field',
+            required: marked.required,
             label: label,
             placeholder: placeholder,
             labelBox: null,
@@ -2234,11 +2342,15 @@
                 return ((a.bbox || a.settings).x || 0) - ((b.bbox || b.settings).x || 0);
             }).map(function (node) { return node.text || node.content || ''; }).join(' ').trim();
             var typical = candidates.map(function (item) { return item.height; }).sort(function (a, b) { return a - b; })[Math.floor(candidates.length / 2)] || box.height;
+            var marked = splitRequiredMark(label, placeholder);
+            label = marked.label;
+            placeholder = marked.placeholder;
             return {
                 id: randomId(),
                 type: 'form-field',
                 fieldType: detectFieldType(label, placeholder, box.height > typical * 1.8),
                 role: 'form-field',
+                required: marked.required,
                 label: label || 'Поле',
                 placeholder: placeholder,
                 labelBox: labelNode ? Object.assign({}, nodeBox(labelNode)) : null,
@@ -2417,7 +2529,7 @@
         return String(value || '')
             .replace(/\s+/g, ' ')
             .replace(/^[^0-9A-Za-zА-Яа-яІіЇїЄєҐґ]+/, '')
-            .replace(/[^0-9A-Za-zА-Яа-яІіЇїЄєҐґ.,:;!?'"()«»/%+#&\- ]+$/g, '')
+            .replace(/[^0-9A-Za-zА-Яа-яІіЇїЄєҐґ.,:;!?'"()«»/%+#&*\- ]+$/g, '')
             .trim();
     }
 

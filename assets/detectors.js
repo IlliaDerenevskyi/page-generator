@@ -1063,6 +1063,198 @@
         return { serif: ratio >= (bold ? 2.1 : 1.52), ratio: ratio };
     }
 
+    // A linear gradient behind a box (a section band or a card), or null. The box is read as a grid of cells, each reduced to its
+    // median colour so text and icons drop out; for each direction the cells are ordered along it and the colour must change
+    // smoothly (and clearly) from one end to the other. Photos, noise and radial or mesh gradients fit no direction and give null.
+    // Angles are CSS angles (90 = to the right, 180 = to the bottom); stops are the end colours, plus a middle one when the
+    // ramp is visibly not a straight mix of the ends.
+    function detectLinearGradient(data, width, height, box) {
+        var bw = Math.min(Math.floor(box.width), width - Math.max(0, Math.floor(box.x)));
+        var bh = Math.min(Math.floor(box.height), height - Math.max(0, Math.floor(box.y)));
+        if (bw < 160 || bh < 40) return null;
+        var x0 = Math.max(0, Math.floor(box.x)), y0 = Math.max(0, Math.floor(box.y));
+        var cols = Math.min(14, Math.max(4, Math.floor(bw / 24)));
+        var rows = Math.min(14, Math.max(3, Math.floor(bh / 24)));
+        var cells = [];
+        for (var gy = 0; gy < rows; gy += 1) {
+            for (var gx = 0; gx < cols; gx += 1) {
+                var cx0 = x0 + Math.floor(gx * bw / cols), cx1 = x0 + Math.floor((gx + 1) * bw / cols);
+                var cy0 = y0 + Math.floor(gy * bh / rows), cy1 = y0 + Math.floor((gy + 1) * bh / rows);
+                var rs = [], gs = [], bs = [];
+                var step = Math.max(1, Math.floor(Math.min(cx1 - cx0, cy1 - cy0) / 6));
+                for (var y = cy0; y < cy1; y += step) {
+                    for (var x = cx0; x < cx1; x += step) {
+                        var o = (y * width + x) * 4;
+                        rs.push(data[o]); gs.push(data[o + 1]); bs.push(data[o + 2]);
+                    }
+                }
+                if (!rs.length) return null;
+                var med = function (list) { list.sort(function (a, b) { return a - b; }); return list[Math.floor(list.length / 2)]; };
+                cells.push({ gx: (gx + .5) / cols, gy: (gy + .5) / rows, c: [med(rs), med(gs), med(bs)] });
+            }
+        }
+        var distance = function (a, b) { return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]); };
+        var mean = function (list) { var n = Math.max(1, list.length); return [0, 1, 2].map(function (i) { return list.reduce(function (sum, c) { return sum + c[i]; }, 0) / n; }); };
+        var flat = mean(cells.map(function (cell) { return cell.c; }));
+        var flatError = cells.reduce(function (sum, cell) { return sum + distance(cell.c, flat); }, 0) / cells.length;
+        if (flatError < 10) return null;
+        var best = null;
+        // Opposite directions fit equally well (with the colours swapped); the first angle listed wins such a tie.
+        var angles = [180, 90, 135, 45, 0, 270, 225, 315];
+        for (var extra = 15; extra < 360; extra += 15) if (angles.indexOf(extra) === -1) angles.push(extra);
+        angles.forEach(function (angle) {
+            var rad = angle * Math.PI / 180;
+            var dx = Math.sin(rad), dy = -Math.cos(rad);
+            var projected = cells.map(function (cell) { return { t: (cell.gx - .5) * dx * bw + (cell.gy - .5) * dy * bh, c: cell.c }; });
+            var low = Math.min.apply(null, projected.map(function (p) { return p.t; }));
+            var high = Math.max.apply(null, projected.map(function (p) { return p.t; }));
+            if (high - low < 1) return;
+            var bins = [[], [], [], [], []];
+            projected.forEach(function (p) { p.u = (p.t - low) / (high - low); bins[Math.min(4, Math.floor(p.u * 5))].push(p.c); });
+            if (bins.some(function (bin) { return !bin.length; })) return;
+            // Medians (not means) per bin, and a trimmed error below, so large letters or an image sitting in the area do not decide the fit.
+            var colors = bins.map(function (bin) {
+                return [0, 1, 2].map(function (k) { var v = bin.map(function (c) { return c[k]; }).sort(function (a, b) { return a - b; }); return v[Math.floor(v.length / 2)]; });
+            });
+            var strength = distance(colors[0], colors[4]);
+            if (strength < 40) return;
+            // A step (two flat areas meeting at an edge, as at a sidebar) is not a ramp: no single interval may carry most of the change.
+            var steps = [0, 1, 2, 3].map(function (i) { return distance(colors[i], colors[i + 1]); });
+            if (Math.max.apply(null, steps) > strength * .55 || Math.min.apply(null, steps) < strength * .06) return;
+            var residuals = projected.map(function (p) {
+                var pos = Math.min(3.999, Math.max(0, p.u * 5 - .5));
+                var i = Math.floor(pos), f = pos - i;
+                var fit = [0, 1, 2].map(function (k) { return colors[i][k] * (1 - f) + colors[i + 1][k] * f; });
+                return distance(p.c, fit);
+            }).sort(function (a, b) { return a - b; });
+            var kept = residuals.slice(0, Math.max(1, Math.floor(residuals.length * .75)));
+            var error = kept.reduce(function (sum, v) { return sum + v; }, 0) / kept.length;
+            if (!best || error < best.error - .01) best = { angle: angle, error: error, colors: colors, strength: strength };
+        });
+        // The ramp has to explain most of the colour variation and leave little behind.
+        if (!best || best.error > 14 || best.error > flatError * .4) return null;
+        var hex = function (c) { return '#' + c.map(function (v) { var n = Math.max(0, Math.min(255, Math.round(v))); return (n < 16 ? '0' : '') + n.toString(16); }).join(''); };
+        // Bin centres sit at .1 and .9 of the ramp, so the ends are extrapolated to 0 and 1.
+        var start = best.colors[0].map(function (v, i) { return v - (best.colors[1][i] - v) * .5; });
+        var end = best.colors[4].map(function (v, i) { return v + (v - best.colors[3][i]) * .5; });
+        var stops = [{ pos: 0, color: hex(start) }];
+        var straight = [0, 1, 2].map(function (k) { return (start[k] + end[k]) / 2; });
+        if (distance(best.colors[2], straight) > 14) stops.push({ pos: 50, color: hex(best.colors[2]) });
+        stops.push({ pos: 100, color: hex(end) });
+        return { type: 'linear', angle: best.angle, stops: stops };
+    }
+
+    // A soft backdrop (mesh or radial gradient, blurred glow) no linear ramp can describe. The area is read as a coarse grid of
+    // median colours; cells under text or pictures (`mask` rects) are filled in from their neighbours, so the result is the
+    // background with the foreground removed. Returns null for flat areas, photos and anything with hard edges.
+    // `strict` additionally demands that there is no edge at all (used to decide whether neighbouring bands are one backdrop).
+        function detectBackdrop(data, width, height, box, mask, strict) {
+        var x0 = Math.max(0, Math.floor(box.x)), y0 = Math.max(0, Math.floor(box.y));
+        var bw = Math.min(Math.floor(box.width), width - x0), bh = Math.min(Math.floor(box.height), height - y0);
+        if (bw < 160 || bh < 80) return null;
+        var size = Math.max(12, Math.ceil(Math.max(bw, bh) / 96));
+        var cols = Math.ceil(bw / size), rows = Math.ceil(bh / size);
+        var masked = new Uint8Array(cols * rows);
+        (mask || []).forEach(function (rect) {
+            var c0 = Math.floor((rect.x - x0) / size), c1 = Math.floor((rect.x + rect.width - x0) / size);
+            var r0 = Math.floor((rect.y - y0) / size), r1 = Math.floor((rect.y + rect.height - y0) / size);
+            for (var r = Math.max(0, r0); r <= Math.min(rows - 1, r1); r += 1) for (var c = Math.max(0, c0); c <= Math.min(cols - 1, c1); c += 1) masked[r * cols + c] = 1;
+        });
+        var cells = new Array(cols * rows);
+        var med = function (list) { list.sort(function (a, b) { return a - b; }); return list[Math.floor(list.length / 2)]; };
+        for (var gy = 0; gy < rows; gy += 1) {
+            for (var gx = 0; gx < cols; gx += 1) {
+                var rs = [], gs = [], bs = [];
+                var cx1 = Math.min(bw, (gx + 1) * size), cy1 = Math.min(bh, (gy + 1) * size);
+                var step = Math.max(1, Math.floor(size / 5));
+                for (var y = gy * size; y < cy1; y += step) {
+                    for (var x = gx * size; x < cx1; x += step) {
+                        var o = ((y0 + y) * width + x0 + x) * 4;
+                        rs.push(data[o]); gs.push(data[o + 1]); bs.push(data[o + 2]);
+                    }
+                }
+                cells[gy * cols + gx] = rs.length ? [med(rs), med(gs), med(bs)] : null;
+            }
+        }
+        var at = function (c, r) { return c < 0 || r < 0 || c >= cols || r >= rows ? null : cells[r * cols + c]; };
+        var known = function (c, r) { return !masked[r * cols + c] && cells[r * cols + c] ? cells[r * cols + c] : null; };
+        var dist = function (a, b) { return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]); };
+        var knownCount = 0;
+        for (var i = 0; i < masked.length; i += 1) if (!masked[i] && cells[i]) knownCount += 1;
+        if (knownCount < cells.length * .45) return null;
+        // Neighbouring known cells: how often does the colour jump, and how far does it drift on average.
+        var pairs = 0, jumps = 0, drift = 0;
+        var diffs = [];
+        for (var r = 0; r < rows; r += 1) {
+            for (var c = 0; c < cols; c += 1) {
+                var here = known(c, r);
+                if (!here) continue;
+                [[1, 0], [0, 1]].forEach(function (d) {
+                    if (c + d[0] >= cols || r + d[1] >= rows) return;
+                    var next = known(c + d[0], r + d[1]);
+                    if (!next) return;
+                    var delta = dist(here, next);
+                    pairs += 1; drift += delta; diffs.push(delta);
+                    if (delta > 45) jumps += 1;
+                });
+            }
+        }
+        if (pairs < 20) return null;
+        if (jumps / pairs > (strict ? .003 : .004) || drift / pairs > 9) return null;
+        // Cells that still stand out from their neighbours (letters OCR missed) are treated as foreground too.
+        for (var pass = 0; pass < 2; pass += 1) {
+            for (var rr = 0; rr < rows; rr += 1) {
+                for (var cc = 0; cc < cols; cc += 1) {
+                    var cell = known(cc, rr);
+                    if (!cell) continue;
+                    var around = [];
+                    for (var dy = -1; dy <= 1; dy += 1) for (var dx = -1; dx <= 1; dx += 1) {
+                        if ((dx || dy) && cc + dx >= 0 && rr + dy >= 0 && cc + dx < cols && rr + dy < rows && known(cc + dx, rr + dy)) around.push(known(cc + dx, rr + dy));
+                    }
+                    if (around.length < 3) continue;
+                    var m = [0, 1, 2].map(function (k) { return med(around.map(function (a) { return a[k]; })); });
+                    if (dist(cell, m) > 40) masked[rr * cols + cc] = 1;
+                }
+            }
+        }
+        // Fill the masked cells outward from the known ones.
+        var filled = cells.map(function (cell, index) { return masked[index] ? null : cell; });
+        var remaining = filled.filter(function (cell) { return !cell; }).length;
+        for (var guard = 0; remaining && guard < cols + rows; guard += 1) {
+            var next = filled.slice();
+            for (var fr = 0; fr < rows; fr += 1) {
+                for (var fc = 0; fc < cols; fc += 1) {
+                    if (filled[fr * cols + fc]) continue;
+                    var sum = [0, 0, 0], count = 0;
+                    for (var ey = -1; ey <= 1; ey += 1) for (var ex = -1; ex <= 1; ex += 1) {
+                        var nb = (ex || ey) && fc + ex >= 0 && fr + ey >= 0 && fc + ex < cols && fr + ey < rows ? filled[(fr + ey) * cols + fc + ex] : null;
+                        if (nb) { sum[0] += nb[0]; sum[1] += nb[1]; sum[2] += nb[2]; count += 1; }
+                    }
+                    if (count) { next[fr * cols + fc] = [sum[0] / count, sum[1] / count, sum[2] / count]; remaining -= 1; }
+                }
+            }
+            filled = next;
+        }
+        if (remaining) return null;
+        var mean = [0, 1, 2].map(function (k) { return filled.reduce(function (sum, cell) { return sum + cell[k]; }, 0) / filled.length; });
+        var spread = filled.reduce(function (sum, cell) { return sum + dist(cell, mean); }, 0) / filled.length;
+        // Flat areas are an ordinary background colour, not a backdrop image.
+        if (spread < 24) return null;
+        var pixels = [];
+        filled.forEach(function (cell) { pixels.push(Math.round(cell[0]), Math.round(cell[1]), Math.round(cell[2])); });
+        return { cols: cols, rows: rows, cell: size, spread: spread, jumps: jumps, pairs: pairs, drift: drift / pairs, pixels: pixels };
+    }
+
+    // A trailing asterisk marks a required field; it becomes a flag and leaves the label (or placeholder) it was typed in.
+    function splitRequiredMark(label, placeholder) {
+        var mark = /\s*[*\u2217\uFF0A\u2731]+\s*$/;
+        label = label || '';
+        placeholder = placeholder || '';
+        if (mark.test(label)) return { label: label.replace(mark, '').trim(), placeholder: placeholder, required: true };
+        if (mark.test(placeholder)) return { label: label, placeholder: placeholder.replace(mark, '').trim(), required: true };
+        return { label: label, placeholder: placeholder, required: false };
+    }
+
     // Several OCR passes over the same image: keep the most confident reading wherever passes found the same word.
     function mergeWordPasses(passes) {
         var all = [];
@@ -1100,6 +1292,8 @@
 
     return {
         assessResolution: assessResolution,
+        detectBackdrop: detectBackdrop,
+        splitRequiredMark: splitRequiredMark,
         detectOutline: detectOutline,
         detectIconBlobs: detectIconBlobs,
         findIcons: findIcons,
@@ -1120,6 +1314,7 @@
         sharpen: sharpen,
         prepareForOcr: prepareForOcr,
         classifyTypeface: classifyTypeface,
+        detectLinearGradient: detectLinearGradient,
         mergeWordPasses: mergeWordPasses
     };
 }));

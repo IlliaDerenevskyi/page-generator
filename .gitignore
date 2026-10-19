@@ -7,4 +7,6 @@ tools/node_modules/
 
 # development session cookies and run output
 tools/.cookies.json
+tools/.mcp-*.js
 tools/results/
+.playwright-mcp/

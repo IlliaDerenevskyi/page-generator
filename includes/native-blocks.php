@@ -23,6 +23,7 @@ trait Page_Generator_Native_Blocks {
             $args['attributes']['pgBox'] = ['type' => 'object'];
             $args['attributes']['pgCanvas'] = ['type' => 'object'];
             $args['attributes']['pgFlow'] = ['type' => 'object'];
+            $args['attributes']['pgId'] = ['type' => 'string'];
         }
         return $args;
     }
@@ -157,6 +158,12 @@ trait Page_Generator_Native_Blocks {
         return $box;
     }
 
+    // The node id travels with its block so edits can be read back into the schema (see block-sync.php).
+    private function native_id($node) {
+        $id = is_array($node) && isset($node['id']) && is_string($node['id']) ? preg_replace('/[^A-Za-z0-9_-]/', '', $node['id']) : '';
+        return $id !== '' ? ['pgId' => $id] : [];
+    }
+
     private function native_color($value) {
         $value = strtolower(trim((string) $value));
         return preg_match('/^#[0-9a-f]{6}$/', $value) ? $value : '';
@@ -210,7 +217,22 @@ trait Page_Generator_Native_Blocks {
             $attrs['typography']['fontWeight'] = (string) $weight;
             $css .= 'font-weight:' . $weight . ';';
         }
-        if ($fill) {
+        $gradient = $background ? $this->gradient_css($style) : '';
+        if ($gradient) {
+            $attrs['color']['gradient'] = $gradient;
+            $css .= 'background:' . $gradient . ';';
+            $classes['background'] = true;
+        } elseif ($background && ($image = $this->backdrop_image($style))) {
+            if ($fill) {
+                $attrs['color']['background'] = $fill;
+                $css .= 'background-color:' . $fill . ';';
+                $classes['background'] = true;
+            }
+            $attrs['background']['backgroundImage'] = ['url' => $image['url'], 'id' => $image['id'], 'source' => 'file'];
+            $attrs['background']['backgroundSize'] = 'cover';
+            $attrs['background']['backgroundPosition'] = '50% 50%';
+            // Core writes background-image styles at render time (block support), so the saved markup carries only the attributes.
+        } elseif ($fill) {
             $attrs['color']['background'] = $fill;
             $css .= 'background-color:' . $fill . ';';
             $classes['background'] = true;
@@ -236,7 +258,7 @@ trait Page_Generator_Native_Blocks {
         $style = $this->native_style($node, true, $background);
         // The face is a class (not inline CSS) so the block still validates against its saved markup.
         if (($node['style']['fontFamily'] ?? '') === 'serif') $custom_class = trim($custom_class . ' pg-serif');
-        $attrs = [];
+        $attrs = $this->native_id($node);
         if ($box = $this->native_box($node, $origin)) $attrs['pgBox'] = $box;
         if ($custom_class) $attrs['className'] = $custom_class;
         $attrs = array_merge($attrs, $style['attrs']);
@@ -264,7 +286,7 @@ trait Page_Generator_Native_Blocks {
         $inner = $this->native_block('core/button', $button_attrs,
             '<div class="wp-block-button"><a class="' . esc_attr($link_class) . '" href="' . esc_url($url) . '"' . ($style['css'] !== '' ? ' style="' . esc_attr($style['css']) . '"' : '') . '>',
             esc_html($label), '</a></div>');
-        $attrs = [];
+        $attrs = $this->native_id($node);
         if ($box = $this->native_box($node, $origin)) $attrs['pgBox'] = $box;
         return $this->native_block('core/buttons', $attrs, '<div class="wp-block-buttons">', $inner, '</div>');
     }
@@ -277,7 +299,7 @@ trait Page_Generator_Native_Blocks {
             return $this->native_group_block($node, $origin, [], true);
         }
         $radius = absint(($node['style']['borderRadius'] ?? 0));
-        $attrs = [];
+        $attrs = $this->native_id($node);
         if ($id) $attrs['id'] = $id;
         $attrs['sizeSlug'] = 'full';
         $attrs['linkDestination'] = 'none';
@@ -303,14 +325,14 @@ trait Page_Generator_Native_Blocks {
             }
             if ($index === 0) $head = '<thead><tr>' . $cells . '</tr></thead>'; else $body .= '<tr>' . $cells . '</tr>';
         }
-        $attrs = [];
+        $attrs = $this->native_id($node);
         if ($box = $this->native_box($node, $origin)) $attrs['pgBox'] = $box;
         return $this->native_block('core/table', $attrs, '<figure class="wp-block-table"><table class="has-fixed-layout">', $head . '<tbody>' . $body . '</tbody>', '</table></figure>');
     }
 
     private function native_group_block($node, $origin, $children, $leaf = false, $custom = []) {
         $style = $this->native_style($node, false, true);
-        $attrs = $custom;
+        $attrs = $custom + $this->native_id($node);
         if ($box = $this->native_box($node, $origin)) $attrs['pgBox'] = $box;
         $attrs = array_merge($attrs, $style['attrs']);
         $class = $this->native_class_attr('wp-block-group', '', $style['classes']);

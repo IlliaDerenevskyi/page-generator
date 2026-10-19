@@ -9,12 +9,14 @@
 defined('ABSPATH') || exit;
 
 require_once __DIR__ . '/includes/native-blocks.php';
+require_once __DIR__ . '/includes/block-sync.php';
 require_once __DIR__ . '/includes/wpforms-export.php';
 require_once __DIR__ . '/includes/flow-layout.php';
 require_once __DIR__ . '/includes/flow-elementor.php';
 
 final class Page_Generator_Plugin {
     use Page_Generator_Native_Blocks;
+    use Page_Generator_Block_Sync;
     use Page_Generator_WPForms_Export;
     use Page_Generator_Flow_Layout;
     use Page_Generator_Flow_Elementor;
@@ -31,6 +33,7 @@ final class Page_Generator_Plugin {
         add_action('wp_enqueue_scripts', [$this, 'enqueue_frontend_assets']);
         add_action('enqueue_block_editor_assets', [$this, 'enqueue_block_editor_assets']);
         $this->register_native_bridge();
+        $this->register_block_sync();
 
         add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('wp_ajax_page_generator_scan_figma', [$this, 'scan_figma']);
@@ -227,8 +230,8 @@ final class Page_Generator_Plugin {
         if ($hook !== 'settings_page_page-generator') {
             return;
         }
-        wp_enqueue_style('page-generator-admin', plugins_url('assets/admin.css', __FILE__), [], self::VERSION);
-        wp_enqueue_script('page-generator-admin', plugins_url('assets/admin.js', __FILE__), ['jquery'], self::VERSION, true);
+        wp_enqueue_style('page-generator-admin', plugins_url('assets/admin.css', __FILE__), [], $this->asset_version('assets/admin.css'));
+        wp_enqueue_script('page-generator-admin', plugins_url('assets/admin.js', __FILE__), ['jquery'], $this->asset_version('assets/admin.js'), true);
     }
 
     public function enqueue_editor_assets() {
@@ -237,7 +240,13 @@ final class Page_Generator_Plugin {
 
     public function enqueue_block_editor_assets() {
         $this->enqueue_generator_assets('page-generator-gutenberg-editor', true);
-        wp_enqueue_script('page-generator-bridge', plugins_url('assets/block-bridge.js', __FILE__), ['wp-hooks', 'wp-blocks', 'wp-element', 'wp-block-editor', 'wp-components', 'wp-compose'], self::VERSION, true);
+        wp_enqueue_script('page-generator-bridge', plugins_url('assets/block-bridge.js', __FILE__), ['wp-hooks', 'wp-blocks', 'wp-element', 'wp-block-editor', 'wp-components', 'wp-compose'], $this->asset_version('assets/block-bridge.js'), true);
+    }
+
+    // Plugin version plus the file's modification time, so an edited script or stylesheet is never served from a stale browser cache.
+    private function asset_version($relative) {
+        $mtime = @filemtime(plugin_dir_path(__FILE__) . $relative);
+        return self::VERSION . ($mtime ? '.' . $mtime : '');
     }
 
     public function enqueue_frontend_assets() {
@@ -252,23 +261,23 @@ final class Page_Generator_Plugin {
         $elementor_data = get_post_meta($post->ID, '_elementor_data', true);
         $has_elementor_canvas = is_string($elementor_data) && (strpos($elementor_data, 'page-generator-canvas') !== false || strpos($elementor_data, 'pg-el-flow') !== false);
         if ($has_generator_blocks || $has_elementor_canvas) {
-            wp_enqueue_style('page-generator-frontend', plugins_url('assets/frontend.css', __FILE__), [], self::VERSION);
+            wp_enqueue_style('page-generator-frontend', plugins_url('assets/frontend.css', __FILE__), [], $this->asset_version('assets/frontend.css'));
         }
         if ($has_elementor_canvas) {
             // Elementor lays the canvas out in px, so it needs the shared canvas rules and the zoom-to-fit script.
-            wp_enqueue_style('page-generator-canvas', plugins_url('assets/canvas.css', __FILE__), [], self::VERSION);
-            wp_enqueue_script('page-generator-canvas-scale', plugins_url('assets/canvas-scale.js', __FILE__), [], self::VERSION, true);
+            wp_enqueue_style('page-generator-canvas', plugins_url('assets/canvas.css', __FILE__), [], $this->asset_version('assets/canvas.css'));
+            wp_enqueue_script('page-generator-canvas-scale', plugins_url('assets/canvas-scale.js', __FILE__), [], $this->asset_version('assets/canvas-scale.js'), true);
             wp_localize_script('page-generator-canvas-scale', 'PageGeneratorScale', ['maxWidth' => absint($this->settings()['default_container_width'])]);
         }
     }
 
     private function enqueue_generator_assets($handle, $block_editor = false) {
         $settings = $this->settings();
-        wp_enqueue_style($handle, plugins_url('assets/editor.css', __FILE__), [], self::VERSION);
+        wp_enqueue_style($handle, plugins_url('assets/editor.css', __FILE__), [], $this->asset_version('assets/editor.css'));
         $dependencies = $block_editor ? ['jquery', 'wp-blocks', 'wp-element', 'wp-block-editor'] : ['jquery'];
-        wp_enqueue_script('page-generator-detectors', plugins_url('assets/detectors.js', __FILE__), [], self::VERSION, true);
+        wp_enqueue_script('page-generator-detectors', plugins_url('assets/detectors.js', __FILE__), [], $this->asset_version('assets/detectors.js'), true);
         $dependencies[] = 'page-generator-detectors';
-        wp_enqueue_script($handle, plugins_url('assets/editor.js', __FILE__), $dependencies, self::VERSION, true);
+        wp_enqueue_script($handle, plugins_url('assets/editor.js', __FILE__), $dependencies, $this->asset_version('assets/editor.js'), true);
         wp_localize_script($handle, 'PageGeneratorConfig', [
             'ajaxUrl' => admin_url('admin-ajax.php'),
             'nonce' => wp_create_nonce(self::NONCE),
@@ -717,11 +726,14 @@ final class Page_Generator_Plugin {
         $block_content = $this->render_block_content($schema);
         // Keep the previous content restorable before it is replaced.
         wp_save_post_revision($post_id);
+        // The content comes from the schema, so reading it back into the schema would be pointless.
+        $this->block_sync_suspended = true;
         $updated = wp_update_post([
             'ID' => $post_id,
             'post_title' => $title,
             'post_content' => $block_content,
         ], true);
+        $this->block_sync_suspended = false;
         if (is_wp_error($updated)) {
             return $updated;
         }
@@ -754,6 +766,7 @@ final class Page_Generator_Plugin {
             delete_post_meta($post_id, '_elementor_css');
             delete_post_meta($post_id, '_elementor_edit_mode');
         }
+        $this->store_block_ids($post_id, $block_content);
         update_post_meta($post_id, '_page_generator_output_mode', $elementor_mode ? 'elementor-native-tree' : 'gutenberg-native-blocks');
         update_post_meta($post_id, '_page_generator_render_length', strlen($rendered_html));
         update_post_meta($post_id, '_page_generator_render_hash', md5($rendered_html));
@@ -1271,7 +1284,26 @@ final class Page_Generator_Plugin {
             'padding' => $this->elementor_box_values(0),
         ];
         $fill = $style['background'] ?? ($node['background'] ?? '');
-        if ($fill) {
+        $gradient = is_array($style['gradient'] ?? null) && !empty($style['gradient']['stops']) && count($style['gradient']['stops']) >= 2 ? $style['gradient'] : null;
+        if ($gradient) {
+            // Elementor's native gradient has two stops: the first and the last of the detected ramp.
+            $first = $gradient['stops'][0];
+            $last = end($gradient['stops']);
+            $out['background_background'] = 'gradient';
+            $out['background_color'] = $this->normalize_color($first['color'] ?? '#ffffff');
+            $out['background_color_stop'] = ['unit' => '%', 'size' => 0, 'sizes' => []];
+            $out['background_color_b'] = $this->normalize_color($last['color'] ?? '#ffffff');
+            $out['background_color_b_stop'] = ['unit' => '%', 'size' => 100, 'sizes' => []];
+            $out['background_gradient_type'] = 'linear';
+            $out['background_gradient_angle'] = ['unit' => 'deg', 'size' => ((int) ($gradient['angle'] ?? 180)) % 360, 'sizes' => []];
+        } elseif ($image = $this->backdrop_image($style)) {
+            $out['background_background'] = 'classic';
+            if ($fill) $out['background_color'] = $this->normalize_color($fill);
+            $out['background_image'] = ['url' => $image['url'], 'id' => $image['id']];
+            $out['background_position'] = 'center center';
+            $out['background_repeat'] = 'no-repeat';
+            $out['background_size'] = 'cover';
+        } elseif ($fill) {
             $out['background_background'] = 'classic';
             $out['background_color'] = $this->normalize_color($fill);
         }
@@ -1420,8 +1452,11 @@ final class Page_Generator_Plugin {
             $height = !empty($node['bbox']['height']) ? max(20, absint($node['bbox']['height'])) : 0;
             // Controls are placed by their own box like every other node; without it they fall into the flow and drift.
             $position = $dimensions && !empty($node['bbox']) ? $this->render_box_position_style($node, $dimensions) : '';
+            $required = !empty($node['required']);
+            $required_attr = $required ? ' required aria-required="true"' : '';
+            $mark = $required ? '<span class="page-generator-required" style="color:#d63638"> *</span>' : '';
             if ($field_type === 'checkbox') {
-                return '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr($position . 'display:flex;align-items:center;gap:' . $this->scaled_px(8) . ';') . '"><input type="checkbox"> ' . esc_html($label) . '</label>';
+                return '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr($position . 'display:flex;align-items:center;gap:' . $this->scaled_px(8) . ';') . '"><input type="checkbox"' . $required_attr . '> ' . esc_html($label) . $mark . '</label>';
             }
             // Sizes follow the canvas like everything else: the caption from its measured box, the control text a little smaller.
             $caption_size = max(10, absint(round((float) ($node['labelBox']['height'] ?? 0) * 1.15))) ?: 12;
@@ -1429,15 +1464,18 @@ final class Page_Generator_Plugin {
             $control_style = 'font-size:' . $control_size . ';width:100%;box-sizing:border-box;margin:0;padding:0 ' . $this->scaled_px(12) . ';' . ($position ? 'height:100%;' : ($height ? 'min-height:' . $height . 'px;' : '')) . $this->render_surface_style($node) . 'border:1px solid #d5dde6;';
             $wrapper = '<label class="page-generator-block page-generator-form-field"' . $block_attrs . ' style="' . esc_attr(($position ?: 'position:relative;') . 'display:flex;flex-direction:column;margin:0;font-size:' . $this->font_size_css($caption_size, $dimensions) . ';') . '">';
             // The caption sits above the control, outside the control's own box.
-            $caption = $label !== '' && $label !== 'Поле' ? '<span style="position:absolute;left:0;bottom:100%;margin-bottom:' . $this->scaled_px(6) . ';white-space:nowrap;">' . esc_html($label) . '</span>' : '';
+            $has_caption = $label !== '' && $label !== 'Поле';
+            // Without a caption the asterisk stays in the placeholder, where the screenshot had it.
+            if ($required && !$has_caption) $placeholder = rtrim($placeholder) . ' *';
+            $caption = $has_caption ? '<span style="position:absolute;left:0;bottom:100%;margin-bottom:' . $this->scaled_px(6) . ';white-space:nowrap;">' . esc_html($label) . $mark . '</span>' : '';
             if ($field_type === 'select') {
-                return $wrapper . $caption . '<select style="' . esc_attr($control_style) . '"><option>' . esc_html($placeholder) . '</option></select></label>';
+                return $wrapper . $caption . '<select' . $required_attr . ' style="' . esc_attr($control_style) . '"><option value="">' . esc_html($placeholder) . '</option></select></label>';
             }
             if ($field_type === 'textarea') {
-                return $wrapper . $caption . '<textarea placeholder="' . esc_attr($placeholder) . '" style="' . esc_attr($control_style . 'padding-top:12px;') . '"></textarea></label>';
+                return $wrapper . $caption . '<textarea' . $required_attr . ' placeholder="' . esc_attr($placeholder) . '" style="' . esc_attr($control_style . 'padding-top:12px;') . '"></textarea></label>';
             }
             $input_type = $field_type === 'phone' ? 'tel' : $field_type;
-            return $wrapper . $caption . '<input type="' . esc_attr($input_type) . '" placeholder="' . esc_attr($placeholder) . '" style="' . esc_attr($control_style) . '"></label>';
+            return $wrapper . $caption . '<input type="' . esc_attr($input_type) . '"' . $required_attr . ' placeholder="' . esc_attr($placeholder) . '" style="' . esc_attr($control_style) . '"></label>';
         }
         if ($type === 'form') {
             $fields = '';
@@ -1566,7 +1604,9 @@ final class Page_Generator_Plugin {
     private function render_surface_style($node) {
         $style = is_array($node['style'] ?? null) ? $node['style'] : [];
         $css = '';
-        if (!empty($style['background'])) $css .= 'background:' . $this->normalize_color($style['background']) . ';';
+        if ($gradient = $this->gradient_css($style)) $css .= 'background:' . $gradient . ';';
+        elseif ($image = $this->backdrop_image($style)) $css .= 'background:' . (!empty($style['background']) ? $this->normalize_color($style['background']) . ' ' : '') . 'url(' . $image['url'] . ') center/cover no-repeat;';
+        elseif (!empty($style['background'])) $css .= 'background:' . $this->normalize_color($style['background']) . ';';
         if (!empty($style['color'])) $css .= 'color:' . $this->normalize_color($style['color']) . ';';
         if (!empty($style['borderRadius'])) $css .= 'border-radius:' . absint($style['borderRadius']) . 'px;';
         if (!empty($style['fontWeight'])) $css .= 'font-weight:' . absint($style['fontWeight']) . ';';
@@ -1599,6 +1639,25 @@ final class Page_Generator_Plugin {
     }
 
     // Font sizes come from the screenshot in source pixels and scale with the canvas, like positions do.
+    // CSS for a detected linear gradient (style.gradient = {angle, stops: [{pos, color}]}), or '' when there is none.
+    private function gradient_css($style) {
+        $gradient = is_array($style['gradient'] ?? null) ? $style['gradient'] : null;
+        if (!$gradient || empty($gradient['stops']) || !is_array($gradient['stops']) || count($gradient['stops']) < 2) return '';
+        $parts = [];
+        foreach (array_slice($gradient['stops'], 0, 4) as $stop) {
+            if (!is_array($stop) || !isset($stop['color'])) return '';
+            $parts[] = $this->normalize_color($stop['color']) . ' ' . max(0, min(100, (int) ($stop['pos'] ?? 0))) . '%';
+        }
+        return 'linear-gradient(' . (((int) ($gradient['angle'] ?? 180)) % 360) . 'deg,' . implode(',', $parts) . ')';
+    }
+
+    // A picture behind a surface (a soft backdrop cut from the screenshot): [url, attachment id] or null.
+    private function backdrop_image($style) {
+        $image = is_array($style['backgroundImage'] ?? null) ? $style['backgroundImage'] : null;
+        $url = $image ? esc_url_raw($image['url'] ?? '') : '';
+        return $url ? ['url' => $url, 'id' => absint($image['attachmentId'] ?? 0)] : null;
+    }
+
     private function font_family_css($style) {
         return (($style['fontFamily'] ?? '') === 'serif') ? "font-family:Georgia,'Times New Roman',serif;" : '';
     }

@@ -8,9 +8,9 @@
     "dom": 97.18
   },
   "github-repo.png": {
-    "visual": 94.13,
+    "visual": 94.1,
     "perceptual": 98.24,
-    "content": 55.83,
+    "content": 57.27,
     "worstZone": 0,
     "text": 100,
     "dom": 73.78
@@ -18,23 +18,23 @@
   "lab6.png": {
     "visual": 93.1,
     "perceptual": 97.39,
-    "content": 73.4,
+    "content": 73.47,
     "worstZone": 11,
     "text": 97.43,
     "dom": 83.8
   },
   "nodejs-org.png": {
-    "visual": 85.97,
-    "perceptual": 95.82,
-    "content": 60.03,
+    "visual": 86.02,
+    "perceptual": 95.86,
+    "content": 60.32,
     "worstZone": 26,
     "text": 99.12,
     "dom": 86.75
   },
   "notion-login.png": {
-    "visual": 96.69,
+    "visual": 96.7,
     "perceptual": 98.79,
-    "content": 40.35,
+    "content": 40.41,
     "worstZone": 21,
     "text": 98.28,
     "dom": 86.49
@@ -56,11 +56,35 @@
     "dom": 97.39
   },
   "wikipedia-article.png": {
-    "visual": 82.97,
+    "visual": 82.98,
     "perceptual": 95.74,
-    "content": 74.39,
+    "content": 74.37,
     "worstZone": 29,
     "text": 100,
     "dom": 99.69
+  },
+  "gradients-css.png": {
+    "visual": 87.03,
+    "perceptual": 90.16,
+    "content": 79.09,
+    "worstZone": 56,
+    "text": 100,
+    "dom": 69.7
+  },
+  "backdrops-css.png": {
+    "visual": 96.75,
+    "perceptual": 98.33,
+    "content": 94.48,
+    "worstZone": 81,
+    "text": 100,
+    "dom": 66.67
+  },
+  "form-required.png": {
+    "visual": 98.34,
+    "perceptual": 99.4,
+    "content": 75.43,
+    "worstZone": 48,
+    "text": 86.67,
+    "dom": 100
   }
 }

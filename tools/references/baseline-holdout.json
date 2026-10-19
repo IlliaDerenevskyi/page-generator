@@ -1,19 +1,19 @@
 {
   "bootstrap.png": {
-    "visual": 66.63,
-    "perceptual": 93.35,
-    "content": 51.13,
-    "worstZone": 26,
-    "text": 97.5,
-    "dom": 85.94
+    "visual": 72.47,
+    "perceptual": 94,
+    "content": 60.78,
+    "worstZone": 33,
+    "text": 99.44,
+    "dom": 89.66
   },
   "diia.png": {
-    "visual": 78.37,
-    "perceptual": 93,
-    "content": 64.5,
-    "worstZone": 1,
+    "visual": 87.64,
+    "perceptual": 95.1,
+    "content": 79.36,
+    "worstZone": 11,
     "text": 100,
-    "dom": 89.22
+    "dom": 89.76
   },
   "django.png": {
     "visual": 88.15,
@@ -56,9 +56,9 @@
     "dom": 93.18
   },
   "ukr-net.png": {
-    "visual": 62.49,
+    "visual": 62.48,
     "perceptual": 84.82,
-    "content": 36.81,
+    "content": 36.8,
     "worstZone": 0,
     "text": 99.8,
     "dom": 93.81
@@ -66,7 +66,7 @@
   "vuejs.png": {
     "visual": 91.81,
     "perceptual": 96.46,
-    "content": 24.62,
+    "content": 24.64,
     "worstZone": 0,
     "text": 96.46,
     "dom": 76.88
