@@ -1148,7 +1148,10 @@
     // median colours; cells under text or pictures (`mask` rects) are filled in from their neighbours, so the result is the
     // background with the foreground removed. Returns null for flat areas, photos and anything with hard edges.
     // `strict` additionally demands that there is no edge at all (used to decide whether neighbouring bands are one backdrop).
-        function detectBackdrop(data, width, height, box, mask, strict) {
+    // `minKnown` is the share of cells that must be free of foreground (.45 by default; lower for a box that is mostly text);
+    // `minSpread` is the colour variation below which the area counts as flat (24 by default; 0 asks only whether it is smooth);
+    // `maxForeground` is the share of cells that may stand out from their neighbours, as unrecognised text does (.12 by default).
+        function detectBackdrop(data, width, height, box, mask, strict, minKnown, minSpread, maxForeground) {
         var x0 = Math.max(0, Math.floor(box.x)), y0 = Math.max(0, Math.floor(box.y));
         var bw = Math.min(Math.floor(box.width), width - x0), bh = Math.min(Math.floor(box.height), height - y0);
         if (bw < 160 || bh < 80) return null;
@@ -1181,7 +1184,29 @@
         var dist = function (a, b) { return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]); };
         var knownCount = 0;
         for (var i = 0; i < masked.length; i += 1) if (!masked[i] && cells[i]) knownCount += 1;
-        if (knownCount < cells.length * .45) return null;
+        if (knownCount < cells.length * (minKnown || .45)) return null;
+        // Cells that stand out from their neighbours (letters OCR missed) are foreground too; too many of them means a picture, not a backdrop.
+        var before = 0;
+        for (var k = 0; k < masked.length; k += 1) if (masked[k]) before += 1;
+        for (var pass = 0; pass < 2; pass += 1) {
+            for (var rr = 0; rr < rows; rr += 1) {
+                for (var cc = 0; cc < cols; cc += 1) {
+                    var cell = known(cc, rr);
+                    if (!cell) continue;
+                    var around = [];
+                    for (var dy = -1; dy <= 1; dy += 1) for (var dx = -1; dx <= 1; dx += 1) {
+                        if ((dx || dy) && cc + dx >= 0 && rr + dy >= 0 && cc + dx < cols && rr + dy < rows && known(cc + dx, rr + dy)) around.push(known(cc + dx, rr + dy));
+                    }
+                    if (around.length < 3) continue;
+                    var m = [0, 1, 2].map(function (k) { return med(around.map(function (a) { return a[k]; })); });
+                    if (dist(cell, m) > 40) masked[rr * cols + cc] = 1;
+                }
+            }
+        }
+        var removed = 0;
+        for (var q = 0; q < masked.length; q += 1) if (masked[q]) removed += 1;
+        if (removed - before > knownCount * (maxForeground || .12)) return null;
+
         // Neighbouring known cells: how often does the colour jump, and how far does it drift on average.
         var pairs = 0, jumps = 0, drift = 0;
         var diffs = [];
@@ -1200,23 +1225,9 @@
             }
         }
         if (pairs < 20) return null;
-        if (jumps / pairs > (strict ? .003 : .004) || drift / pairs > 9) return null;
-        // Cells that still stand out from their neighbours (letters OCR missed) are treated as foreground too.
-        for (var pass = 0; pass < 2; pass += 1) {
-            for (var rr = 0; rr < rows; rr += 1) {
-                for (var cc = 0; cc < cols; cc += 1) {
-                    var cell = known(cc, rr);
-                    if (!cell) continue;
-                    var around = [];
-                    for (var dy = -1; dy <= 1; dy += 1) for (var dx = -1; dx <= 1; dx += 1) {
-                        if ((dx || dy) && cc + dx >= 0 && rr + dy >= 0 && cc + dx < cols && rr + dy < rows && known(cc + dx, rr + dy)) around.push(known(cc + dx, rr + dy));
-                    }
-                    if (around.length < 3) continue;
-                    var m = [0, 1, 2].map(function (k) { return med(around.map(function (a) { return a[k]; })); });
-                    if (dist(cell, m) > 40) masked[rr * cols + cc] = 1;
-                }
-            }
-        }
+        // A few jumps are allowed even in a small area (one edge row of cells is a lot of pairs out of a few hundred).
+        var allowedJumps = strict ? .003 * pairs : Math.max(2, .004 * pairs);
+        if (jumps > allowedJumps || drift / pairs > 9) return null;
         // Fill the masked cells outward from the known ones.
         var filled = cells.map(function (cell, index) { return masked[index] ? null : cell; });
         var remaining = filled.filter(function (cell) { return !cell; }).length;
@@ -1239,7 +1250,7 @@
         var mean = [0, 1, 2].map(function (k) { return filled.reduce(function (sum, cell) { return sum + cell[k]; }, 0) / filled.length; });
         var spread = filled.reduce(function (sum, cell) { return sum + dist(cell, mean); }, 0) / filled.length;
         // Flat areas are an ordinary background colour, not a backdrop image.
-        if (spread < 24) return null;
+        if (spread < (minSpread === undefined ? 24 : minSpread)) return null;
         var pixels = [];
         filled.forEach(function (cell) { pixels.push(Math.round(cell[0]), Math.round(cell[1]), Math.round(cell[2])); });
         return { cols: cols, rows: rows, cell: size, spread: spread, jumps: jumps, pairs: pairs, drift: drift / pairs, pixels: pixels };

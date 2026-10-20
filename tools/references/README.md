@@ -17,6 +17,8 @@ php mcp-make.php references/holdout          # or references/desktop, references
 # save those lines to a file, then:
 node mcp-compare.js results.jsonl [--holdout [--details]] [--update-baseline]
 php mcp-make.php <png> schema                # same, but returns the section list with styles instead of the metrics (debugging)
+php mcp-make.php references/holdout elementor          # the page is built as an Elementor tree (same server code, no Elementor editor)
+php mcp-make.php references/holdout elementor-editor   # the real path: Elementor's own editor, "Вставити в Elementor", Elementor's save
 ```
 
 **Headless, no MCP (CI-style):**

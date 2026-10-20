@@ -16,5 +16,5 @@ async (page) => {
     await page.waitForSelector('#pg-build-screenshot:not([disabled])', { timeout: 120000 });
     await page.click('#pg-build-screenshot');
     await page.waitForFunction(() => jQuery('#pg-output-actions').is(':visible') || /помилк|Не вдалося/i.test(document.querySelector('#pg-status').textContent), null, { timeout: 300000 });
-    return await page.evaluate(() => jQuery('#page-generator-modal').data('schema').sections.map((x, i) => i + ' ' + x.type + ' y' + x.bbox.y + ' h' + x.bbox.height + ' ' + JSON.stringify(x.style).slice(0, 150)).join('\n'));
+    return await page.evaluate(() => JSON.stringify(window.__dropped || []));
 }

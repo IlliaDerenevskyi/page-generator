@@ -10,6 +10,7 @@ defined('ABSPATH') || exit;
 
 require_once __DIR__ . '/includes/native-blocks.php';
 require_once __DIR__ . '/includes/block-sync.php';
+require_once __DIR__ . '/includes/elementor-sync.php';
 require_once __DIR__ . '/includes/wpforms-export.php';
 require_once __DIR__ . '/includes/flow-layout.php';
 require_once __DIR__ . '/includes/flow-elementor.php';
@@ -17,6 +18,7 @@ require_once __DIR__ . '/includes/flow-elementor.php';
 final class Page_Generator_Plugin {
     use Page_Generator_Native_Blocks;
     use Page_Generator_Block_Sync;
+    use Page_Generator_Elementor_Sync;
     use Page_Generator_WPForms_Export;
     use Page_Generator_Flow_Layout;
     use Page_Generator_Flow_Elementor;
@@ -34,6 +36,7 @@ final class Page_Generator_Plugin {
         add_action('enqueue_block_editor_assets', [$this, 'enqueue_block_editor_assets']);
         $this->register_native_bridge();
         $this->register_block_sync();
+        $this->register_elementor_sync();
 
         add_action('rest_api_init', [$this, 'register_rest_routes']);
         add_action('wp_ajax_page_generator_scan_figma', [$this, 'scan_figma']);
@@ -267,6 +270,7 @@ final class Page_Generator_Plugin {
             // Elementor lays the canvas out in px, so it needs the shared canvas rules and the zoom-to-fit script.
             wp_enqueue_style('page-generator-canvas', plugins_url('assets/canvas.css', __FILE__), [], $this->asset_version('assets/canvas.css'));
             wp_enqueue_script('page-generator-canvas-scale', plugins_url('assets/canvas-scale.js', __FILE__), [], $this->asset_version('assets/canvas-scale.js'), true);
+            wp_enqueue_script('page-generator-text-fit', plugins_url('assets/text-fit.js', __FILE__), ['page-generator-canvas-scale'], $this->asset_version('assets/text-fit.js'), true);
             wp_localize_script('page-generator-canvas-scale', 'PageGeneratorScale', ['maxWidth' => absint($this->settings()['default_container_width'])]);
         }
     }
@@ -750,6 +754,7 @@ final class Page_Generator_Plugin {
         if ($elementor_mode) {
             $elementor_data = $this->serialize_elementor_schema($schema);
             update_post_meta($post_id, '_elementor_data', wp_slash(wp_json_encode($elementor_data)));
+            $this->store_elementor_ids($post_id, $elementor_data);
             // Without these Elementor ignores _elementor_data and renders post_content, so a REST-built page would stay plain blocks.
             update_post_meta($post_id, '_elementor_edit_mode', 'builder');
             update_post_meta($post_id, '_elementor_template_type', 'wp-page');
@@ -1123,7 +1128,14 @@ final class Page_Generator_Plugin {
         }
         $this->wpforms_enabled = $this->wpforms_wanted(sanitize_key(wp_unslash($_POST['forms'] ?? '')));
         $this->flow_enabled = $this->flow_wanted(sanitize_key(wp_unslash($_POST['layout'] ?? '')));
-        wp_send_json_success(['models' => $this->serialize_elementor_schema($schema)]);
+        $models = $this->serialize_elementor_schema($schema);
+        // The tree is inserted by Elementor's own editor, so the schema it came from is kept for reading Elementor's later edits back into it.
+        $post_id = absint($_POST['postId'] ?? 0);
+        if ($post_id && current_user_can('edit_post', $post_id)) {
+            update_post_meta($post_id, '_page_generator_schema', wp_slash(wp_json_encode($schema)));
+            $this->store_elementor_ids($post_id, $models);
+        }
+        wp_send_json_success(['models' => $models]);
     }
 
     private function serialize_elementor_node($node, $root = false, $parent_bbox = null) {
@@ -1286,16 +1298,33 @@ final class Page_Generator_Plugin {
         $fill = $style['background'] ?? ($node['background'] ?? '');
         $gradient = is_array($style['gradient'] ?? null) && !empty($style['gradient']['stops']) && count($style['gradient']['stops']) >= 2 ? $style['gradient'] : null;
         if ($gradient) {
-            // Elementor's native gradient has two stops: the first and the last of the detected ramp.
-            $first = $gradient['stops'][0];
-            $last = end($gradient['stops']);
+            // Elementor's native gradient has two stops. A ramp with a middle stop is built from two layers: the background runs from the first
+            // colour to the middle one (and stays there), and the overlay fades the last colour in over it from the middle stop on.
+            $stops = $gradient['stops'];
+            $first = $stops[0];
+            $last = end($stops);
+            $middle = count($stops) >= 3 ? $stops[(int) floor(count($stops) / 2)] : null;
+            $angle = ((int) ($gradient['angle'] ?? 180)) % 360;
+            $percent = function ($value) { return ['unit' => '%', 'size' => max(0, min(100, (int) $value)), 'sizes' => []]; };
             $out['background_background'] = 'gradient';
             $out['background_color'] = $this->normalize_color($first['color'] ?? '#ffffff');
-            $out['background_color_stop'] = ['unit' => '%', 'size' => 0, 'sizes' => []];
-            $out['background_color_b'] = $this->normalize_color($last['color'] ?? '#ffffff');
-            $out['background_color_b_stop'] = ['unit' => '%', 'size' => 100, 'sizes' => []];
+            $out['background_color_stop'] = $percent(0);
+            $out['background_color_b'] = $this->normalize_color($middle ? ($middle['color'] ?? '#ffffff') : ($last['color'] ?? '#ffffff'));
+            $out['background_color_b_stop'] = $percent($middle ? ($middle['pos'] ?? 50) : 100);
             $out['background_gradient_type'] = 'linear';
-            $out['background_gradient_angle'] = ['unit' => 'deg', 'size' => ((int) ($gradient['angle'] ?? 180)) % 360, 'sizes' => []];
+            $out['background_gradient_angle'] = ['unit' => 'deg', 'size' => $angle, 'sizes' => []];
+            if ($middle) {
+                $end = $this->normalize_color($last['color'] ?? '#ffffff');
+                $clear = preg_match('/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i', $end, $rgb) ? 'rgba(' . hexdec($rgb[1]) . ',' . hexdec($rgb[2]) . ',' . hexdec($rgb[3]) . ',0)' : $end;
+                $out['background_overlay_background'] = 'gradient';
+                $out['background_overlay_color'] = $clear;
+                $out['background_overlay_color_stop'] = $percent($middle['pos'] ?? 50);
+                $out['background_overlay_color_b'] = $end;
+                $out['background_overlay_color_b_stop'] = $percent(100);
+                $out['background_overlay_gradient_type'] = 'linear';
+                $out['background_overlay_gradient_angle'] = ['unit' => 'deg', 'size' => $angle, 'sizes' => []];
+                $out['background_overlay_opacity'] = ['unit' => 'px', 'size' => 1, 'sizes' => []];
+            }
         } elseif ($image = $this->backdrop_image($style)) {
             $out['background_background'] = 'classic';
             if ($fill) $out['background_color'] = $this->normalize_color($fill);

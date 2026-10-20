@@ -35,7 +35,10 @@ trait Page_Generator_Native_Blocks {
                 return;
             }
         }
-        wp_enqueue_style('page-generator-canvas', plugins_url('assets/canvas.css', dirname(__DIR__) . '/page-generator.php'), [], self::VERSION);
+        wp_enqueue_style('page-generator-canvas', plugins_url('assets/canvas.css', dirname(__DIR__) . '/page-generator.php'), [], $this->asset_version('assets/canvas.css'));
+        if (!is_admin()) {
+            wp_enqueue_script('page-generator-text-fit', plugins_url('assets/text-fit.js', dirname(__DIR__) . '/page-generator.php'), [], $this->asset_version('assets/text-fit.js'), true);
+        }
     }
 
     public function apply_bridge_box($html, $block) {
@@ -212,7 +215,9 @@ trait Page_Generator_Native_Blocks {
             $classes['text'] = true;
         }
         $weight = absint($style['fontWeight'] ?? 0);
-        if ($text && in_array($weight, [500, 600, 700, 800], true)) {
+        // A heading is bold in most themes, so a regular-weight one (400) has to say so; for other text 400 is the default and stays unwritten.
+        $regular_heading = $weight === 400 && ($node['type'] ?? '') === 'heading';
+        if ($text && ($regular_heading || in_array($weight, [500, 600, 700, 800], true))) {
             // Weight comes from the screenshot (measured per text line); regular text keeps the theme's default.
             $attrs['typography']['fontWeight'] = (string) $weight;
             $css .= 'font-weight:' . $weight . ';';

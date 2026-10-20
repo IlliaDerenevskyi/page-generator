@@ -24,7 +24,8 @@
     box-sizing: border-box;
 }
 .page-generator-canvas .pg-abs[style*="--pg-fs"] {
-    font-size: calc(var(--pg-fs) * var(--pg-k));
+    /* --pg-fit (assets/text-fit.js) shrinks a line that came out wider than its box in the page's font. */
+    font-size: calc(var(--pg-fs) * var(--pg-k) * var(--pg-fit, 1));
 }
 .page-generator-canvas .pg-abs.pg-text {
     height: auto;

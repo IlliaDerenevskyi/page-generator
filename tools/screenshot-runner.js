@@ -306,7 +306,7 @@ async function main() {
         // 'networkidle' never settles on a live site (background polling), so the wait is bounded to the load event
         // and the canvas itself. The whole run has to finish inside the web request, which nginx cuts at 60 s.
         await page.goto(url, { waitUntil: 'load', timeout: 25000 });
-        const canvas = page.locator('[data-page-generator="canvas"], .page-generator-canvas, .pg-flow-page').locator('visible=true').first();
+        const canvas = page.locator('[data-page-generator="canvas"], .page-generator-canvas, .pg-flow-page, .pg-el-flow').locator('visible=true').first();
         await canvas.waitFor({ state: 'attached', timeout: 20000 }).catch(() => {});
         if (!await canvas.count()) {
             throw new Error('Generated page canvas was not found; comparison cannot be scoped safely.');
@@ -314,7 +314,15 @@ async function main() {
         // The theme wraps the canvas in a header, margins and a footer; pin the canvas to the viewport so the screenshot
         // lines up pixel for pixel with the reference instead of comparing the whole themed page.
         await canvas.evaluate((element) => {
-            element.style.cssText += ';position:fixed;left:0;top:0;width:100vw;max-width:none;margin:0;zoom:1;z-index:2147483647;';
+            // An Elementor canvas is a px layout at its source width, zoomed to fit (assets/canvas-scale.js zooms it to its parent, which is
+            // not the viewport here): give it the source width and the zoom that makes it exactly as wide as the viewport.
+            const source = /(?:^|\s)pg-w-(\d+)(?:\s|$)/.exec(element.className);
+            if (element.classList.contains('pg-el-canvas') && source) {
+                element.style.cssText += ';position:fixed;left:0;top:0;width:' + source[1] + 'px;max-width:none;margin:0;z-index:2147483647;';
+                element.style.setProperty('--pg-zoom', String(window.innerWidth / Number(source[1])));
+            } else {
+                element.style.cssText += ';position:fixed;left:0;top:0;width:100vw;max-width:none;margin:0;zoom:1;z-index:2147483647;';
+            }
             document.documentElement.style.overflow = 'hidden';
             // Where no block covers the canvas it is transparent; keep the admin bar and theme from showing through.
             if (/rgba\(0, 0, 0, 0\)|transparent/.test(getComputedStyle(element).backgroundColor)) element.style.backgroundColor = '#ffffff';
@@ -323,6 +331,8 @@ async function main() {
         });
         await page.evaluate(async () => {
             if (document.fonts && document.fonts.ready) await document.fonts.ready;
+            // The lines that came out wider than their box in the page's font are shrunk to fit (assets/text-fit.js).
+            if (window.PageGeneratorFit) window.PageGeneratorFit();
         });
         const canvasRect = await canvas.boundingBox();
         const screenshot = await page.screenshot({ type: 'png', fullPage: false });

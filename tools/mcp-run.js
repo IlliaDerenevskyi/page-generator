@@ -3,6 +3,7 @@
 // Builds a page from the screenshot and returns the plugin's own comparison text.
 async (page) => {
     const targets = __TARGETS__;
+    const mode = '__MODE__';
     const cookies = __COOKIES__;
     await page.context().addCookies(cookies);
     // The MCP browser keeps its cache between runs: without this an edited editor.js/detectors.js would not be picked up.
@@ -19,11 +20,13 @@ async (page) => {
         await page.waitForSelector('#pg-build-screenshot:not([disabled])', { timeout: 120000 });
         await page.click('#pg-build-screenshot');
         await page.waitForFunction(() => jQuery('#pg-output-actions').is(':visible') || /помилк|Не вдалося/i.test(document.querySelector('#pg-status').textContent), null, { timeout: 300000 });
+        // Outside Elementor's own editor the page is built as blocks; the stub makes the editor ask for the Elementor tree instead.
+        if (mode === 'elementor') await page.evaluate(() => { window.elementor = window.elementor || {}; });
         await page.click('#pg-create-page');
         await page.waitForFunction(() => /Візуальна|не виконано|Не вдалося|помилк/i.test(document.querySelector('#pg-status').textContent), null, { timeout: 400000 }).catch(() => {});
         const text = (await page.textContent('#pg-status')).replace(/\s+/g, ' ');
         const pick = (re) => { const m = text.match(re); return m ? parseFloat(m[1]) : null; };
-        return JSON.stringify({ file: target.split('/').pop(), visual: pick(/Візуальна відповідність:\s*([\d.]+)%/), perceptual: pick(/Перцептивна відповідність:\s*([\d.]+)%/), content: pick(/Змістова відповідність:\s*([\d.]+)%/), worstZone: pick(/найгірша зона:[^—]*—\s*([\d.]+)%/), text: pick(/Текстова відповідність:\s*([\d.]+)%/), dom: pick(/DOM-відповідність:\s*([\d.]+)%/), failed: /Візуальна/.test(text) ? undefined : text.slice(0, 200) });
+        return JSON.stringify({ file: target.split('/').pop(), visual: pick(/Візуальна відповідність:\s*([\d.]+)%/), perceptual: pick(/Перцептивна відповідність:\s*([\d.]+)%/), content: pick(/Змістова відповідність:\s*([\d.]+)%/), worstZone: pick(/найгірша зона:[^—]*—\s*([\d.]+)%/), text: pick(/Текстова відповідність:\s*([\d.]+)%/), dom: pick(/DOM-відповідність:\s*([\d.]+)%/), sizes: (text.match(/Reference: (\d+x\d+), rendered: (\d+x\d+)/) || []).slice(1).join(' -> '), tokens: (text.match(/tokens: (\d+ → \d+)/) || [])[1], links: await page.$$eval('#pg-status a', (links) => links.map((link) => link.href)), mode, failed: /Візуальна/.test(text) ? undefined : text.slice(0, 200) });
     };
     // A page that does not come up (the editor sometimes reloads under the headless run) is retried once.
     for (const target of targets) {

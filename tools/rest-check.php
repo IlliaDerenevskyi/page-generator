@@ -88,7 +88,8 @@ $check('Elementor gets the backdrop as a background image', strpos(get_post_meta
 $call('PUT', $route, ['schema' => $base, 'editorMode' => 'gutenberg']);
 
 // Required fields: the flag reaches the built-in form (HTML required + a red asterisk), and Elementor's HTML widget.
-$required_schema = $base;
+// A schema of its own, so the check does not depend on what the scratch page happens to hold.
+$required_schema = ['version' => 2, 'title' => 'Required', 'sections' => [['id' => 'rs0', 'type' => 'section', 'settings' => ['sourceWidth' => 1000, 'sourceHeight' => 400, 'direction' => 'column', 'gap' => 16], 'bbox' => ['x' => 0, 'y' => 0, 'width' => 1000, 'height' => 400], 'style' => ['background' => '#ffffff'], 'children' => [], 'elements' => []]]];
 $field = function ($label, $required, $y) { return ['id' => 'f' . $y, 'type' => 'form-field', 'fieldType' => 'text', 'label' => $label, 'placeholder' => '', 'required' => $required, 'bbox' => ['x' => 40, 'y' => $y, 'width' => 300, 'height' => 40], 'settings' => ['x' => 40, 'y' => $y, 'width' => 300, 'height' => 40], 'children' => [], 'elements' => []]; };
 $required_schema['sections'][0]['children'] = [['id' => 'frm', 'type' => 'form', 'bbox' => ['x' => 0, 'y' => 0, 'width' => 400, 'height' => 200], 'settings' => ['x' => 0, 'y' => 0, 'width' => 400, 'height' => 200], 'children' => [$field('Email', true, 40), $field('Name', false, 110)], 'elements' => []]];
 $required_schema['sections'][0]['elements'] = $required_schema['sections'][0]['children'];
@@ -160,5 +161,38 @@ $check('rebuilding from the merged schema keeps the edits', strpos($rebuilt, 'He
 $before_hash = md5(get_post_meta($post, '_page_generator_schema', true));
 wp_update_post(['ID' => $post, 'post_content' => wp_slash($rebuilt)]);
 $check('saving unchanged blocks leaves the schema alone', md5(get_post_meta($post, '_page_generator_schema', true)) === $before_hash);
+
+// Two-way bridge for Elementor: what Elementor saves comes back into the schema (ids of elements are the ids of nodes).
+$call('PUT', $route, ['schema' => $sync_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$tree = json_decode(get_post_meta($post, '_elementor_data', true), true);
+$check('Elementor elements carry the node ids', is_array($tree) && json_encode($tree) !== false && strpos(json_encode($tree), '"id":"t1"') !== false && strpos(json_encode($tree), '"id":"b1"') !== false);
+$check('the exported element ids are remembered', in_array('t1', (array) json_decode(get_post_meta($post, '_page_generator_el_ids', true), true), true));
+$el_sync = null;
+foreach ((array) ($GLOBALS['wp_filter']['elementor/document/after_save']->callbacks ?? []) as $callbacks) foreach ($callbacks as $callback) if (is_array($callback['function']) && ($callback['function'][1] ?? '') === 'sync_elementor_to_schema') $el_sync = $callback['function'];
+$check('the Elementor sync is hooked on save', $el_sync !== null);
+$stub = new class($post) { private $id; public function __construct($id) { $this->id = $id; } public function get_main_id() { return $this->id; } };
+$edit = function (&$nodes, $id, $fn) use (&$edit) { foreach ($nodes as &$n) { if (($n['id'] ?? '') === $id) $fn($n); if (!empty($n['elements'])) $edit($n['elements'], $id, $fn); } unset($n); };
+$drop = function ($nodes, $id) use (&$drop) { $out = []; foreach ($nodes as $n) { if (($n['id'] ?? '') === $id) continue; if (!empty($n['elements'])) $n['elements'] = $drop($n['elements'], $id); $out[] = $n; } return $out; };
+$edited_tree = $tree;
+$edit($edited_tree, 't1', function (&$n) { $n['settings']['editor'] = '<p>Hello Elementor</p>'; $n['settings']['_offset_x']['size'] = 95; $n['settings']['text_color'] = '#00aa00'; $n['settings']['typography_font_size']['size'] = 26; });
+$edit($edited_tree, 'b1', function (&$n) { $n['settings']['text'] = 'Buy later'; $n['settings']['link']['url'] = 'https://example.org/'; });
+$edit($edited_tree, 's1', function (&$n) { $n['elements'][] = ['id' => 'abc1234', 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => ['title' => 'Added in Elementor', '_position' => 'absolute', '_offset_x' => ['size' => 30], '_offset_y' => ['size' => 250], '_element_custom_width' => ['size' => 280]], 'elements' => []]; });
+$edited_tree = $drop($edited_tree, 't2');
+update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($edited_tree)));
+call_user_func($el_sync, $stub, ['elements' => $edited_tree]);
+$t1 = $node('t1');
+$check('Elementor text reaches the schema', ($t1['text'] ?? '') === 'Hello Elementor');
+$check('Elementor position reaches the schema', (int) ($t1['bbox']['x'] ?? 0) === 95 && (int) ($t1['bbox']['y'] ?? 0) === 40);
+$check('Elementor colour and size reach the schema', ($t1['style']['color'] ?? '') === '#00aa00' && (int) ($t1['style']['fontSize'] ?? 0) === 26);
+$check('Elementor button text and link reach the schema', ($node('b1')['text'] ?? '') === 'Buy later' && ($node('b1')['behavior']['url'] ?? '') === 'https://example.org/');
+$check('a widget deleted in Elementor removes its node', $node('t2') === null);
+$added = $node('abc1234');
+$check('a widget added in Elementor becomes a node', ($added['text'] ?? '') === 'Added in Elementor' && ($added['type'] ?? '') === 'heading' && (int) ($added['bbox']['y'] ?? 0) === 250);
+$hash = md5(get_post_meta($post, '_page_generator_schema', true));
+call_user_func($el_sync, $stub, ['elements' => $edited_tree]);
+$check('saving unchanged Elementor data leaves the schema alone', md5(get_post_meta($post, '_page_generator_schema', true)) === $hash);
+$call('PUT', $route, ['schema' => $call('GET', $route)->get_data()['schema'], 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$check('rebuilding Elementor from the merged schema keeps the edits', strpos(get_post_meta($post, '_elementor_data', true), 'Hello Elementor') !== false && strpos(get_post_meta($post, '_elementor_data', true), 'Delete me') === false && strpos(get_post_meta($post, '_elementor_data', true), 'Added in Elementor') !== false);
+$call('PUT', $route, ['schema' => $schema, 'editorMode' => 'gutenberg']);
 $call('PUT', $route, ['schema' => $schema]);
 exit($failed ? 1 : 0);

@@ -1,72 +1,72 @@
 {
   "bootstrap.png": {
-    "visual": 72.47,
-    "perceptual": 94,
-    "content": 60.78,
+    "visual": 72.51,
+    "perceptual": 94.03,
+    "content": 60.92,
     "worstZone": 33,
     "text": 99.44,
     "dom": 89.66
   },
   "diia.png": {
-    "visual": 87.64,
-    "perceptual": 95.1,
-    "content": 79.36,
-    "worstZone": 11,
+    "visual": 86.87,
+    "perceptual": 95.25,
+    "content": 78.8,
+    "worstZone": 19,
     "text": 100,
     "dom": 89.76
   },
   "django.png": {
-    "visual": 88.15,
-    "perceptual": 97.15,
-    "content": 66.2,
+    "visual": 88.2,
+    "perceptual": 97.17,
+    "content": 66.08,
     "worstZone": 1,
     "text": 100,
     "dom": 90.7
   },
   "hacker-news.png": {
-    "visual": 65.07,
-    "perceptual": 95.96,
-    "content": 78.92,
-    "worstZone": 9,
+    "visual": 65.75,
+    "perceptual": 96.31,
+    "content": 83.05,
+    "worstZone": 25,
     "text": 100,
     "dom": 70.71
   },
   "mdn-flexbox.png": {
-    "visual": 86.19,
-    "perceptual": 94.8,
-    "content": 43.93,
+    "visual": 86.25,
+    "perceptual": 94.86,
+    "content": 44.32,
     "worstZone": 0,
     "text": 100,
     "dom": 90.96
   },
   "python-docs.png": {
-    "visual": 85.76,
-    "perceptual": 97.25,
-    "content": 48.89,
+    "visual": 85.8,
+    "perceptual": 97.29,
+    "content": 49.32,
     "worstZone": 7,
     "text": 100,
     "dom": 96.51
   },
   "python-org.png": {
-    "visual": 78.85,
-    "perceptual": 93.96,
-    "content": 71.11,
-    "worstZone": 15,
+    "visual": 79.94,
+    "perceptual": 94.19,
+    "content": 73.48,
+    "worstZone": 26,
     "text": 100,
     "dom": 93.18
   },
   "ukr-net.png": {
-    "visual": 62.48,
-    "perceptual": 84.82,
-    "content": 36.8,
+    "visual": 63.4,
+    "perceptual": 85.35,
+    "content": 39.94,
     "worstZone": 0,
     "text": 99.8,
     "dom": 93.81
   },
   "vuejs.png": {
-    "visual": 91.81,
-    "perceptual": 96.46,
-    "content": 24.64,
+    "visual": 91.94,
+    "perceptual": 96.49,
+    "content": 25.46,
     "worstZone": 0,
     "text": 96.46,
     "dom": 76.88

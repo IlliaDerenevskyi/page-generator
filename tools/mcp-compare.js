@@ -12,7 +12,7 @@ const { compareToBaseline, formatReport, formatSummary } = require('./benchmark'
 function readResults(text) {
     const results = {};
     for (const line of text.split('\n').filter((row) => row.trim().startsWith('{'))) {
-        const { file, failed, ...metrics } = JSON.parse(line);
+        const { file, failed, sizes, tokens, links, mode, ...metrics } = JSON.parse(line);
         results[file] = failed ? {} : Object.fromEntries(Object.entries(metrics).filter(([, value]) => typeof value === 'number'));
     }
     return results;

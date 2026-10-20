@@ -555,7 +555,7 @@
             return;
         }
         $('#pg-status').text('Підготовка схеми для Elementor...');
-        request('page_generator_elementor_tree', { schema: JSON.stringify(schema) })
+        request('page_generator_elementor_tree', { schema: JSON.stringify(schema), postId: getCurrentPostId() || 0 })
             .done(function (response) {
                 if (!response.success) {
                     $('#pg-status').text(response.data || 'Не вдалося підготувати схему для Elementor.');
@@ -767,6 +767,12 @@
                     }).then(function (results) {
                         results[0] = results[0].filter(function (word) { return !window.PageGeneratorDetectors.isRuleWord(word); });
                         mergePhotoRegions(canvas, results[1], window.PageGeneratorDetectors.detectPhotoRegions(pixelData, canvas.width, canvas.height, results[0]));
+                        var softBoxes = dropSoftBackdropPhotos(pixelData, canvas, results[1], results[0], surfaces);
+                        return recognizeOverBackdrop(canvas, softBoxes, results[0]).then(function (extra) {
+                            results[0] = results[0].concat(extra);
+                            return results;
+                        });
+                    }).then(function (results) {
                         var found = window.PageGeneratorDetectors.findIcons(pixelData, canvas.width, canvas.height, results[0]);
                         results[0] = results[0].filter(function (word) { return found.droppedWords.indexOf(word) === -1; });
                         var iconCandidates = found.icons.filter(function (icon) {
@@ -804,6 +810,99 @@
                 image.src = reader.result;
             };
             reader.readAsDataURL(file);
+        });
+    }
+
+    // A busy gradient (mesh, glow) with a headline on it looks like a picture to the contour pass, and its text would be baked into a cropped image.
+    // A "photo" whose background, with the words taken out, is a smooth soft backdrop is no photo: it stays a background and its text stays text.
+    function dropSoftBackdropPhotos(pixelData, canvas, regionResult, words, surfaces) {
+        var tools = window.PageGeneratorDetectors;
+        var dropped = [];
+        var rects = (words || []).concat((surfaces || []).filter(function (surface) { return ['button', 'badge', 'input'].indexOf(surface.kind) !== -1; })).map(function (word) { return { x: word.x - 6, y: word.y - 6, width: word.width + 12, height: word.height + 12 }; });
+        var touching = function (rect, box) { return rect.x < box.x + box.width && rect.x + rect.width > box.x && rect.y < box.y + box.height && rect.y + rect.height > box.y; };
+        for (var index = regionResult.boxes.length - 1; index >= 0; index -= 1) {
+            var box = regionResult.boxes[index];
+            if (box.kind !== 'photo-candidate' || box.width < 160 || box.height < 80) continue;
+            // Smooth inside (the words taken out)...
+            var smooth = tools.detectBackdrop(pixelData, canvas.width, canvas.height, box, rects.filter(function (rect) { return touching(rect, box); }), false, .05, 0, .4);
+            if (!smooth) continue;
+            // ...and sitting on a backdrop that varies: a logo or banner on a flat page is smooth too, and stays a picture.
+            var top = Math.max(0, box.y - 60);
+            var around = { x: 0, y: top, width: canvas.width, height: Math.min(canvas.height, box.y + box.height + 60) - top };
+            var surround = tools.detectBackdrop(pixelData, canvas.width, canvas.height, around, rects.filter(function (rect) { return touching(rect, around); }), false, .3);
+            if (surround) {
+                regionResult.boxes.splice(index, 1);
+                // The text is read over the whole strip, not just the box: the box can start inside the first letter.
+                dropped.push({ box: around, backdrop: surround, plates: (surfaces || []).filter(function (surface) { return ['button', 'badge', 'input'].indexOf(surface.kind) !== -1 && touching(surface, around); }) });
+            }
+        }
+        return dropped;
+    }
+
+    // Text sitting on a soft backdrop (white headline on a gradient) defeats the plain OCR pass. Here the backdrop is subtracted first, so the
+    // letters are the only thing left: dark ink on white, which Tesseract reads. Words that are already known are not added twice.
+    function recognizeOverBackdrop(canvas, softBoxes, words) {
+        if (!softBoxes.length) return Promise.resolve([]);
+        return Tesseract.createWorker(PageGeneratorConfig.ocrLanguages || 'ukr+eng').then(function (worker) {
+            var found = [];
+            var chain = worker.setParameters({ tessedit_pageseg_mode: '6' });
+            softBoxes.slice(0, 8).forEach(function (soft) {
+                chain = chain.then(function () {
+                    var box = soft.box;
+                    var grid = soft.backdrop;
+                    var scale = Math.min(3, Math.max(1, Math.round(2400 / Math.max(box.width, 1))));
+                    var width = Math.round(box.width * scale);
+                    var height = Math.round(box.height * scale);
+                    var onPlate = function (px, py) { return (soft.plates || []).some(function (plate) { return px >= plate.x - 2 && px <= plate.x + plate.width + 2 && py >= plate.y - 2 && py <= plate.y + plate.height + 2; }); };
+                    var source = canvas.getContext('2d', { willReadFrequently: true }).getImageData(box.x, box.y, box.width, box.height).data;
+                    var crop = document.createElement('canvas');
+                    crop.width = width;
+                    crop.height = height;
+                    var context = crop.getContext('2d');
+                    var image = context.createImageData(width, height);
+                    var sample = function (gx, gy) {
+                        var cx = Math.max(0, Math.min(grid.cols - 1, gx)), cy = Math.max(0, Math.min(grid.rows - 1, gy));
+                        var o = (cy * grid.cols + cx) * 3;
+                        return [grid.pixels[o], grid.pixels[o + 1], grid.pixels[o + 2]];
+                    };
+                    for (var y = 0; y < height; y += 1) {
+                        var sy = Math.min(box.height - 1, Math.floor(y / scale));
+                        var fy = sy / grid.cell - .5, y0 = Math.floor(fy), ty = fy - y0;
+                        for (var x = 0; x < width; x += 1) {
+                            var sx = Math.min(box.width - 1, Math.floor(x / scale));
+                            var fx = sx / grid.cell - .5, x0 = Math.floor(fx), tx = fx - x0;
+                            var a = sample(x0, y0), b = sample(x0 + 1, y0), c = sample(x0, y0 + 1), d = sample(x0 + 1, y0 + 1);
+                            var so = (sy * box.width + sx) * 4;
+                            var distance = 0;
+                            for (var k = 0; k < 3; k += 1) {
+                                var back = (a[k] * (1 - tx) + b[k] * tx) * (1 - ty) + (c[k] * (1 - tx) + d[k] * tx) * ty;
+                                distance += Math.abs(source[so + k] - back);
+                            }
+                            // Letters differ strongly from the backdrop; anti-aliasing and noise do not. A hard cut gives Tesseract clean black on white.
+                            var value = distance > 90 ? 0 : (distance < 45 ? 255 : 255 - (distance - 45) * 5.6);
+                            if (onPlate(box.x + sx, box.y + sy)) value = 255;
+                            var o = (y * width + x) * 4;
+                            image.data[o] = value; image.data[o + 1] = value; image.data[o + 2] = value; image.data[o + 3] = 255;
+                        }
+                    }
+                    context.putImageData(image, 0, 0);
+                    return worker.recognize(crop).then(function (result) {
+                        (result.data.words || []).forEach(function (word) {
+                            var text = String(word.text || '').trim();
+                            if (!text || word.confidence < 45 || !/[A-Za-zА-Яа-яІіЇїЄєҐґ0-9]{2}/.test(text)) return;
+                            var item = {
+                                text: text,
+                                x: Math.round(box.x + word.bbox.x0 / scale), y: Math.round(box.y + word.bbox.y0 / scale),
+                                width: Math.round((word.bbox.x1 - word.bbox.x0) / scale), height: Math.round((word.bbox.y1 - word.bbox.y0) / scale),
+                                confidence: word.confidence
+                            };
+                            var known = (words || []).concat(found).some(function (other) { return boxOverlapRatio(item, other) > .4; });
+                            if (!known && item.height >= 8) found.push(item);
+                        });
+                    });
+                });
+            });
+            return chain.then(function () { return worker.terminate(); }).then(function () { return found; });
         });
     }
 
@@ -1645,7 +1744,7 @@
                 if (height < 120) continue;
                 var span = { x: 0, y: top, width: analysis.width, height: height };
                 var ramp = tools.detectLinearGradient(pixels, analysis.width, analysis.height, span)
-                    || tools.detectBackdrop(pixels, analysis.width, analysis.height, span, foregroundRects(analysis, top, height), true);
+                    || tools.detectBackdrop(pixels, analysis.width, analysis.height, span, foregroundRects(analysis, top, height), true, undefined, undefined, .01);
                 if (ramp) best = { end: end, y: top, height: height };
             }
             if (best) {
