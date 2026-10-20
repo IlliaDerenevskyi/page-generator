@@ -510,3 +510,33 @@ test('isMonospaceLine needs an equal character pitch across words', () => {
     assert.strictEqual(isMonospaceLine(proportional), false);
     assert.strictEqual(isMonospaceLine(mono.slice(0, 2)), false);
 });
+
+test('detectLinearGradient keeps every real bend of a multi-colour ramp and drops stops the straight mix already gives', () => {
+    const { detectLinearGradient } = require('../assets/detectors');
+    const W = 800, H = 240;
+    const ramp = (points) => {
+        const data = new Uint8ClampedArray(W * H * 4);
+        for (let y = 0; y < H; y += 1) for (let x = 0; x < W; x += 1) {
+            const u = x / (W - 1);
+            let i = 0; while (i < points.length - 2 && u > points[i + 1][0]) i += 1;
+            const [p0, c0] = points[i], [p1, c1] = points[i + 1];
+            const f = Math.min(1, Math.max(0, (u - p0) / (p1 - p0)));
+            data.set([...c0.map((v, k) => Math.round(v + (c1[k] - v) * f)), 255], (y * W + x) * 4);
+        }
+        return data;
+    };
+    const box = { x: 0, y: 0, width: W, height: H };
+    const rainbow = detectLinearGradient(ramp([[0, [220, 40, 40]], [.33, [240, 220, 60]], [.66, [40, 180, 90]], [1, [50, 70, 220]]]), W, H, box);
+    assert.ok(rainbow && rainbow.stops.length >= 4, 'four-colour ramp keeps at least four stops, got ' + (rainbow && rainbow.stops.length));
+    const three = detectLinearGradient(ramp([[0, [250, 240, 255]], [.5, [120, 60, 200]], [1, [20, 20, 90]]]), W, H, box);
+    assert.strictEqual(three.stops.length, 3);
+    const two = detectLinearGradient(ramp([[0, [250, 240, 255]], [1, [20, 20, 90]]]), W, H, box);
+    // The plain reading may add a middle stop on a straight ramp, but then that stop lies on the straight line between the ends.
+    const rgb = (hex) => [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16));
+    assert.ok(two.stops.length <= 3);
+    if (two.stops.length === 3) {
+        const [a, m, b] = two.stops.map((stop) => rgb(stop.color));
+        const f = two.stops[1].pos / 100;
+        assert.ok(a.every((v, k) => Math.abs(m[k] - (v + (b[k] - v) * f)) < 24), 'the middle stop of a two-colour ramp sits on the line');
+    }
+});

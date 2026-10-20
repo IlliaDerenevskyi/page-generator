@@ -1128,7 +1128,7 @@
     // smoothly (and clearly) from one end to the other. Photos, noise and radial or mesh gradients fit no direction and give null.
     // Angles are CSS angles (90 = to the right, 180 = to the bottom); stops are the end colours, plus a middle one when the
     // ramp is visibly not a straight mix of the ends.
-    function detectLinearGradient(data, width, height, box) {
+    function detectLinearGradientLegacy(data, width, height, box) {
         var bw = Math.min(Math.floor(box.width), width - Math.max(0, Math.floor(box.x)));
         var bh = Math.min(Math.floor(box.height), height - Math.max(0, Math.floor(box.y)));
         if (bw < 160 || bh < 40) return null;
@@ -1202,6 +1202,187 @@
         if (distance(best.colors[2], straight) > 14) stops.push({ pos: 50, color: hex(best.colors[2]) });
         stops.push({ pos: 100, color: hex(end) });
         return { type: 'linear', angle: best.angle, stops: stops };
+    }
+
+    function detectMultiStopGradient(data, width, height, box) {
+        var bw = Math.min(Math.floor(box.width), width - Math.max(0, Math.floor(box.x)));
+        var bh = Math.min(Math.floor(box.height), height - Math.max(0, Math.floor(box.y)));
+        if (bw < 160 || bh < 40) return null;
+        var x0 = Math.max(0, Math.floor(box.x)), y0 = Math.max(0, Math.floor(box.y));
+        var cols = Math.min(28, Math.max(4, Math.floor(bw / 24)));
+        var rows = Math.min(28, Math.max(3, Math.floor(bh / 24)));
+        var cells = [];
+        for (var gy = 0; gy < rows; gy += 1) {
+            for (var gx = 0; gx < cols; gx += 1) {
+                var cx0 = x0 + Math.floor(gx * bw / cols), cx1 = x0 + Math.floor((gx + 1) * bw / cols);
+                var cy0 = y0 + Math.floor(gy * bh / rows), cy1 = y0 + Math.floor((gy + 1) * bh / rows);
+                var rs = [], gs = [], bs = [];
+                var step = Math.max(1, Math.floor(Math.min(cx1 - cx0, cy1 - cy0) / 6));
+                for (var y = cy0; y < cy1; y += step) {
+                    for (var x = cx0; x < cx1; x += step) {
+                        var o = (y * width + x) * 4;
+                        rs.push(data[o]); gs.push(data[o + 1]); bs.push(data[o + 2]);
+                    }
+                }
+                if (!rs.length) return null;
+                var med = function (list) { list.sort(function (a, b) { return a - b; }); return list[Math.floor(list.length / 2)]; };
+                cells.push({ gx: (gx + .5) / cols, gy: (gy + .5) / rows, c: [med(rs), med(gs), med(bs)] });
+            }
+        }
+        var distance = function (a, b) { return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2]); };
+        var mean = function (list) { var n = Math.max(1, list.length); return [0, 1, 2].map(function (i) { return list.reduce(function (sum, c) { return sum + c[i]; }, 0) / n; }); };
+        var flat = mean(cells.map(function (cell) { return cell.c; }));
+        var flatError = cells.reduce(function (sum, cell) { return sum + distance(cell.c, flat); }, 0) / cells.length;
+        if (flatError < 10) return null;
+        var best = null;
+        // Opposite directions fit equally well (with the colours swapped); the first angle listed wins such a tie.
+        var angles = [180, 90, 135, 45, 0, 270, 225, 315];
+        for (var extra = 15; extra < 360; extra += 15) if (angles.indexOf(extra) === -1) angles.push(extra);
+        angles.forEach(function (angle) {
+            var rad = angle * Math.PI / 180;
+            var dx = Math.sin(rad), dy = -Math.cos(rad);
+            var projected = cells.map(function (cell) { return { t: (cell.gx - .5) * dx * bw + (cell.gy - .5) * dy * bh, c: cell.c }; });
+            var low = Math.min.apply(null, projected.map(function (p) { return p.t; }));
+            var high = Math.max.apply(null, projected.map(function (p) { return p.t; }));
+            if (high - low < 1) return;
+            // Cells sit at the middle of their rows and columns, so the range is widened by half a spacing: no cell lands on a bin edge
+            // (which made opposite directions bin differently) and the bins hold equal numbers of cells.
+            var ordered = projected.map(function (p) { return p.t; }).sort(function (a, b) { return a - b; });
+            var gaps = [];
+            for (var gi = 1; gi < ordered.length; gi += 1) if (ordered[gi] - ordered[gi - 1] > 1e-6) gaps.push(ordered[gi] - ordered[gi - 1]);
+            gaps.sort(function (a, b) { return a - b; });
+            var spacing = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
+            low -= spacing / 2;
+            high += spacing / 2;
+            // Twelve bins resolve a ramp with several colours; a small box (few cells along the direction) falls back to eight, then five.
+            var binCount = 12, bins = null;
+            for (var attempt = 0; attempt < 3; attempt += 1) {
+                bins = [];
+                for (var bi = 0; bi < binCount; bi += 1) bins.push([]);
+                projected.forEach(function (p) { p.u = (p.t - low) / (high - low); bins[Math.min(binCount - 1, Math.floor(p.u * binCount))].push(p.c); });
+                if (!bins.some(function (bin) { return !bin.length; })) break;
+                bins = null;
+                binCount = binCount === 12 ? 8 : 5;
+            }
+            if (!bins) return;
+            // Medians (not means) per bin, and a trimmed error below, so large letters or an image sitting in the area do not decide the fit.
+            var colors = bins.map(function (bin) {
+                return [0, 1, 2].map(function (k) { var v = bin.map(function (c) { return c[k]; }).sort(function (a, b) { return a - b; }); return v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2; });
+            });
+            var last = binCount - 1;
+            var steps = [];
+            for (var si = 0; si < last; si += 1) steps.push(distance(colors[si], colors[si + 1]));
+            // The path along the bins, not the distance between the ends: a ramp through several colours can return near where it began.
+            var strength = steps.reduce(function (sum, value) { return sum + value; }, 0);
+            if (strength < 40 || distance(colors[0], colors[last]) < 40 && strength < 160) return;
+            // A step (two flat areas meeting at an edge, as at a sidebar) is not a ramp: no single interval may carry most of the change.
+            if (Math.max.apply(null, steps) > strength * .55) return;
+            // A ramp that fades into a flat area (a hero melting into the white page) is no ramp across the whole span: its flat part has bins
+            // where nothing changes. One flat bin can be a stop's neighbour; more is a plateau.
+            var meanStep = strength / steps.length;
+            var flatBins = steps.filter(function (step) { return step < meanStep * .2; }).length;
+            if (flatBins > (binCount - 1) * .12) return;
+            var residuals = projected.map(function (p) {
+                var pos = Math.min(last - .001, Math.max(0, p.u * binCount - .5));
+                var i = Math.floor(pos), f = pos - i;
+                var fit = [0, 1, 2].map(function (k) { return colors[i][k] * (1 - f) + colors[i + 1][k] * f; });
+                return distance(p.c, fit);
+            }).sort(function (a, b) { return a - b; });
+            var kept = residuals.slice(0, Math.max(1, Math.floor(residuals.length * .75)));
+            var error = kept.reduce(function (sum, v) { return sum + v; }, 0) / kept.length;
+            // Neighbouring angles fit almost as well as the true one; a later angle has to be clearly better to replace an earlier (rounder) one.
+            if (!best || error < best.error * .9 - .01) best = { angle: angle, error: error, colors: colors, strength: strength, binCount: binCount, cells: projected.map(function (p) { return { u: p.u, c: p.c }; }) };
+        });
+        // The ramp has to explain most of the colour variation and leave little behind.
+        if (!best || best.error > 14 || best.error > flatError * .4) return null;
+        var hex = function (c) { return '#' + c.map(function (v) { var n = Math.max(0, Math.min(255, Math.round(v))); return (n < 16 ? '0' : '') + n.toString(16); }).join(''); };
+        // Bin centres sit half a bin in from the ends, so the ends are extrapolated to 0 and 1.
+        var colorsOut = best.colors, lastBin = best.binCount - 1;
+        var start = colorsOut[0].map(function (v, i) { return v - (colorsOut[1][i] - v) * .5; });
+        var end = colorsOut[lastBin].map(function (v, i) { return v + (v - colorsOut[lastBin - 1][i]) * .5; });
+        // Every bin colour is a candidate stop (at its bin centre) between the ends; a stop that the straight mix of its neighbours
+        // already gives is dropped, so a plain two-colour ramp stays two stops and only real bends survive.
+        var points = [{ pos: 0, c: start }];
+        colorsOut.forEach(function (c, i) { points.push({ pos: (i + .5) / best.binCount * 100, c: c, bin: i }); });
+        points.push({ pos: 100, c: end });
+        var tolerance = 24;
+        while (points.length > 2) {
+            var weakest = -1, weakestError = tolerance;
+            for (var index = 1; index < points.length - 1; index += 1) {
+                var before = points[index - 1], after = points[index + 1];
+                var f = (points[index].pos - before.pos) / (after.pos - before.pos);
+                var mix = [0, 1, 2].map(function (k) { return before.c[k] * (1 - f) + after.c[k] * f; });
+                var error = distance(points[index].c, mix);
+                if (error < weakestError) { weakestError = error; weakest = index; }
+            }
+            if (weakest < 0) break;
+            points.splice(weakest, 1);
+        }
+        // A bend that falls between two bin centres leaves one kept bin on each side of it; the two are replaced by the bend itself,
+        // read where the lines through their neighbours cross.
+        for (var k = 1; k < points.length - 2; k += 1) {
+            var left = points[k], right = points[k + 1];
+            if (left.bin === undefined || right.bin !== left.bin + 1) continue;
+            var before2 = points[k - 1], after2 = points[k + 2];
+            var at = (left.pos + right.pos) / 2;
+            var onLeft = [0, 1, 2].map(function (j) { return before2.c[j] + (left.c[j] - before2.c[j]) * (at - before2.pos) / (left.pos - before2.pos); });
+            var onRight = [0, 1, 2].map(function (j) { return after2.c[j] + (right.c[j] - after2.c[j]) * (at - after2.pos) / (right.pos - after2.pos); });
+            points.splice(k, 2, { pos: at, c: [0, 1, 2].map(function (j) { return (onLeft[j] + onRight[j]) / 2; }) });
+        }
+        var stops = points.map(function (point) { return { pos: Math.round(point.pos), color: hex(point.c) }; });
+        // The bins are free to follow any wiggle, so a mesh of colour glows can pass for a ramp there. The finished stops are the real model:
+        // every cell must lie close to the curve they draw, or this is no linear gradient.
+        var curve = function (u) {
+            var at = u * 100;
+            for (var q = 1; q < points.length; q += 1) {
+                if (at <= points[q].pos || q === points.length - 1) {
+                    var span = Math.max(1e-6, points[q].pos - points[q - 1].pos);
+                    var t = Math.max(0, Math.min(1, (at - points[q - 1].pos) / span));
+                    return [0, 1, 2].map(function (j) { return points[q - 1].c[j] * (1 - t) + points[q].c[j] * t; });
+                }
+            }
+            return points[points.length - 1].c;
+        };
+        var finalErrors = best.cells.map(function (cell) { return distance(cell.c, curve(cell.u)); }).sort(function (a, b) { return a - b; });
+        var finalKept = finalErrors.slice(0, Math.max(1, Math.floor(finalErrors.length * .75)));
+        var finalError = finalKept.reduce(function (sum, v) { return sum + v; }, 0) / finalKept.length;
+        if (finalError > 10 || finalError > flatError * .3) return null;
+        // This path exists for colourful ramps (rainbow, sunset) the plain two/three-stop reading misses; faint ones are left to that reading.
+        if (stops.length < 3) return null;
+        var range = 0;
+        points.forEach(function (a) { points.forEach(function (b) { range = Math.max(range, distance(a.c, b.c)); }); });
+        if (range < 240) return null;
+        return { type: 'linear', angle: best.angle, stops: stops };
+    }
+
+    // A colourful ramp with three or more stops (rainbow, sunset) is read by the multi-stop reading, which is strict about contrast and fit.
+    // Everything else keeps the plain reading (two or three stops, five bins) that the rest of the pipeline was tuned on.
+    function detectLinearGradient(data, width, height, box) {
+        return detectMultiStopGradient(data, width, height, box) || detectLinearGradientLegacy(data, width, height, box);
+    }
+
+    // The colours a detected linear gradient paints over `box`, as the coarse grid detectBackdrop gives (cols, rows, cell, rgb triples),
+    // so text over a ramp can be read by taking the backdrop away like over any other soft backdrop.
+    function gradientGrid(gradient, box) {
+        var cell = Math.max(12, Math.ceil(Math.max(box.width, box.height) / 96));
+        var cols = Math.ceil(box.width / cell), rows = Math.ceil(box.height / cell);
+        var rad = gradient.angle * Math.PI / 180;
+        var dx = Math.sin(rad), dy = -Math.cos(rad);
+        var reach = (Math.abs(box.width * dx) + Math.abs(box.height * dy)) / 2 || 1;
+        var stops = gradient.stops;
+        var channel = function (hex, k) { return parseInt(hex.slice(1 + k * 2, 3 + k * 2), 16); };
+        var pixels = new Uint8Array(cols * rows * 3);
+        for (var r = 0; r < rows; r += 1) {
+            for (var c = 0; c < cols; c += 1) {
+                var px = Math.min(box.width, c * cell + cell / 2) - box.width / 2, py = Math.min(box.height, r * cell + cell / 2) - box.height / 2;
+                var at = Math.max(0, Math.min(100, ((px * dx + py * dy) / reach / 2 + .5) * 100));
+                var q = 1;
+                while (q < stops.length - 1 && at > stops[q].pos) q += 1;
+                var t = Math.max(0, Math.min(1, (at - stops[q - 1].pos) / Math.max(1e-6, stops[q].pos - stops[q - 1].pos)));
+                for (var k = 0; k < 3; k += 1) pixels[(r * cols + c) * 3 + k] = Math.round(channel(stops[q - 1].color, k) * (1 - t) + channel(stops[q].color, k) * t);
+            }
+        }
+        return { cols: cols, rows: rows, cell: cell, pixels: pixels };
     }
 
     // A soft backdrop (mesh or radial gradient, blurred glow) no linear ramp can describe. The area is read as a coarse grid of
@@ -1390,6 +1571,7 @@
         needsLatinReread: needsLatinReread,
         unmixScripts: unmixScripts,
         detectLinearGradient: detectLinearGradient,
+        gradientGrid: gradientGrid,
         mergeWordPasses: mergeWordPasses
     };
 }));

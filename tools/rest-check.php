@@ -81,6 +81,7 @@ $check('Elementor gets a native gradient background', strpos(get_post_meta($post
 // Backdrop picture: a soft mesh/radial background cut from the screenshot is a background image in every output.
 $with_backdrop = $base;
 $with_backdrop['sections'][0]['style'] = array_merge((array) ($with_backdrop['sections'][0]['style'] ?? []), ['backgroundImage' => ['url' => 'http://localhost/wp-content/uploads/backdrop-test.jpg', 'attachmentId' => 0]]);
+unset($with_backdrop['sections'][0]['style']['gradient']); // a gradient wins over a picture, so the scratch page's own ramp must not hide it
 $check('a backdrop picture is accepted', $call('PUT', $route, ['schema' => $with_backdrop])->get_status() === 200);
 $check('blocks carry the backdrop as a background image', strpos(get_post($post)->post_content, 'backdrop-test.jpg') !== false && strpos(get_post($post)->post_content, '"backgroundSize":"cover"') !== false);
 $call('PUT', $route, ['schema' => $with_backdrop, 'editorMode' => 'elementor']);
@@ -193,6 +194,122 @@ call_user_func($el_sync, $stub, ['elements' => $edited_tree]);
 $check('saving unchanged Elementor data leaves the schema alone', md5(get_post_meta($post, '_page_generator_schema', true)) === $hash);
 $call('PUT', $route, ['schema' => $call('GET', $route)->get_data()['schema'], 'layout' => 'pixel', 'editorMode' => 'elementor']);
 $check('rebuilding Elementor from the merged schema keeps the edits', strpos(get_post_meta($post, '_elementor_data', true), 'Hello Elementor') !== false && strpos(get_post_meta($post, '_elementor_data', true), 'Delete me') === false && strpos(get_post_meta($post, '_elementor_data', true), 'Added in Elementor') !== false);
+
+// Forms in both bridges: captions, placeholders, required flags and the submit text edited in the editors come back into the schema.
+$field = function ($id, $label, $placeholder, $y, $required = false, $type = 'text') { return ['id' => $id, 'type' => 'form-field', 'fieldType' => $type, 'label' => $label, 'placeholder' => $placeholder, 'required' => $required, 'bbox' => ['x' => 30, 'y' => $y, 'width' => 300, 'height' => 40], 'settings' => ['x' => 30, 'y' => $y, 'width' => 300, 'height' => 40], 'labelBox' => ['height' => 14], 'style' => ['background' => '#ffffff'], 'children' => [], 'elements' => []]; };
+$form_kids = [
+    $field('ff1', 'Name', 'Your name', 40),
+    $field('ff2', 'Email', 'you@example.com', 110, true, 'email'),
+    ['id' => 'fb1', 'type' => 'button', 'text' => 'Send', 'content' => 'Send', 'bbox' => ['x' => 30, 'y' => 180, 'width' => 120, 'height' => 40], 'settings' => ['x' => 30, 'y' => 180, 'width' => 120, 'height' => 40], 'style' => ['background' => '#2563eb', 'color' => '#ffffff'], 'children' => [], 'elements' => []],
+];
+$form_node = ['id' => 'fm1', 'type' => 'form', 'bbox' => ['x' => 40, 'y' => 40, 'width' => 400, 'height' => 260], 'settings' => ['x' => 40, 'y' => 40, 'width' => 400, 'height' => 260], 'style' => ['background' => '#f8fafc'], 'children' => $form_kids, 'elements' => $form_kids];
+$form_schema = ['version' => 2, 'title' => 'Forms', 'sections' => [['id' => 'fs1', 'type' => 'section', 'settings' => ['sourceWidth' => 600, 'sourceHeight' => 400, 'direction' => 'column', 'gap' => 16], 'bbox' => ['x' => 0, 'y' => 0, 'width' => 600, 'height' => 400], 'style' => ['background' => '#ffffff'], 'children' => [$form_node], 'elements' => [$form_node]]]];
+$form_field = function ($id) use ($call, $route) {
+    $found = null;
+    $walk = function ($nodes) use (&$walk, &$found, $id) { foreach ((array) $nodes as $n) { if (is_array($n) && ($n['id'] ?? '') === $id) $found = $n; if (is_array($n)) $walk($n['children'] ?? []); } };
+    $walk($call('GET', $route)->get_data()['schema']['sections']);
+    return $found;
+};
+$call('PUT', $route, ['schema' => $form_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg', 'forms' => 'custom']);
+$form_content = get_post($post)->post_content;
+$check('a form is exported as a component block with its node tree', strpos($form_content, 'wp:page-generator/component') !== false && strpos($form_content, '"id":"ff2"') !== false);
+$edit_blocks = function ($blocks) use (&$edit_blocks) {
+    foreach ($blocks as &$block) {
+        if (($block['blockName'] ?? '') === 'page-generator/component' && is_array($block['attrs']['node'] ?? null)) {
+            $mut = function (&$n) use (&$mut) {
+                if (($n['id'] ?? '') === 'ff1') $n['label'] = 'Full name';
+                if (($n['id'] ?? '') === 'ff2') { $n['required'] = false; $n['placeholder'] = 'mail@example.org'; }
+                if (($n['id'] ?? '') === 'fb1') { $n['text'] = 'Submit'; $n['content'] = 'Submit'; }
+                foreach (['children', 'elements'] as $k) if (!empty($n[$k])) foreach ($n[$k] as &$c) $mut($c);
+            };
+            $mut($block['attrs']['node']);
+        }
+        if (!empty($block['innerBlocks'])) $block['innerBlocks'] = $edit_blocks($block['innerBlocks']);
+    }
+    return $blocks;
+};
+wp_update_post(['ID' => $post, 'post_content' => wp_slash(serialize_blocks($edit_blocks(parse_blocks($form_content))))]);
+$check('a field caption edited in the block reaches the schema', ($form_field('ff1')['label'] ?? '') === 'Full name');
+$check('a field placeholder and required flag edited in the block reach the schema', ($form_field('ff2')['placeholder'] ?? '') === 'mail@example.org' && empty($form_field('ff2')['required']));
+$check('the submit text edited in the block reaches the schema', ($form_field('fb1')['text'] ?? '') === 'Submit');
+$check('form geometry and untouched fields stay as they were', (int) ($form_field('fm1')['bbox']['width'] ?? 0) === 400 && ($form_field('ff1')['placeholder'] ?? '') === 'Your name');
+$form_hash = md5(get_post_meta($post, '_page_generator_schema', true));
+wp_update_post(['ID' => $post, 'post_content' => wp_slash(get_post($post)->post_content)]);
+$check('saving unchanged form blocks leaves the schema alone', md5(get_post_meta($post, '_page_generator_schema', true)) === $form_hash);
+
+$call('PUT', $route, ['schema' => $form_schema, 'layout' => 'pixel', 'editorMode' => 'elementor', 'forms' => 'custom']);
+$form_tree = json_decode(get_post_meta($post, '_elementor_data', true), true);
+$form_json = json_encode($form_tree);
+$check('the built-in form is an HTML widget whose fields carry their node ids', strpos($form_json, 'data-block-id=\\"ff1\\"') !== false && strpos($form_json, 'data-block-id=\\"fb1\\"') !== false);
+$edit_html = function (&$nodes) use (&$edit_html) {
+    foreach ($nodes as &$n) {
+        if (($n['widgetType'] ?? '') === 'html' && strpos($n['settings']['html'] ?? '', 'data-block-id="ff1"') !== false) {
+            $h = $n['settings']['html'];
+            $h = str_replace('placeholder="Your name"', 'placeholder="Your full name"', $h);
+            $h = preg_replace('#(data-block-id="ff2".*?)\srequired(?: aria-required="true")?#s', '$1', $h, 1);
+            $h = str_replace('>Send</button>', '>Submit</button>', $h);
+            $n['settings']['html'] = $h;
+        }
+        if (!empty($n['elements'])) $edit_html($n['elements']);
+    }
+    unset($n);
+};
+$form_edit_tree = $form_tree;
+$edit_html($form_edit_tree);
+update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($form_edit_tree)));
+call_user_func($el_sync, $stub, ['elements' => $form_edit_tree]);
+$check('an edited placeholder in the Elementor form reaches the schema', ($form_field('ff1')['placeholder'] ?? '') === 'Your full name');
+$check('a removed required attribute in the Elementor form reaches the schema', empty($form_field('ff2')['required']) && ($form_field('ff2')['label'] ?? '') === 'Email');
+$check('an edited submit text in the Elementor form reaches the schema', ($form_field('fb1')['text'] ?? '') === 'Submit');
+$form_hash = md5(get_post_meta($post, '_page_generator_schema', true));
+call_user_func($el_sync, $stub, ['elements' => $form_edit_tree]);
+$check('saving an unchanged Elementor form leaves the schema alone', md5(get_post_meta($post, '_page_generator_schema', true)) === $form_hash);
+
+
+// The order of the blocks (and of the Elementor elements) is the order of the nodes: moving a block in the editor moves its node.
+$child_ids = function ($section_id) use ($call, $route) {
+    $ids = [];
+    $find = function ($nodes) use (&$find, &$ids, $section_id) { foreach ((array) $nodes as $n) { if (!is_array($n)) continue; if (($n['id'] ?? '') === $section_id) $ids = array_map(function ($c) { return $c['id'] ?? ''; }, $n['children'] ?? []); $find($n['children'] ?? []); } };
+    $find($call('GET', $route)->get_data()['schema']['sections']);
+    return $ids;
+};
+$call('PUT', $route, ['schema' => $sync_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
+$before_order = $child_ids('s1');
+$reverse_section = function ($blocks) use (&$reverse_section) {
+    foreach ($blocks as &$block) {
+        if (($block['attrs']['pgId'] ?? '') === 's1' && !empty($block['innerBlocks'])) {
+            $inner = array_values(array_filter($block['innerBlocks'], function ($b) { return !empty($b['blockName']); }));
+            $block['innerBlocks'] = array_reverse($inner);
+            $block['innerContent'] = array_merge([$block['innerContent'][0] ?? ''], array_fill(0, count($inner), null), [end($block['innerContent']) ?: '']);
+        } elseif (!empty($block['innerBlocks'])) {
+            $block['innerBlocks'] = $reverse_section($block['innerBlocks']);
+        }
+    }
+    return $blocks;
+};
+wp_update_post(['ID' => $post, 'post_content' => wp_slash(serialize_blocks($reverse_section(parse_blocks(get_post($post)->post_content))))]);
+$after_order = $child_ids('s1');
+$check('the starting order of the section is t1, t2, b1', $before_order === ['t1', 't2', 'b1']);
+$check('blocks moved in the editor reorder their nodes', $after_order === ['b1', 't2', 't1']);
+$order_hash = md5(get_post_meta($post, '_page_generator_schema', true));
+wp_update_post(['ID' => $post, 'post_content' => wp_slash(get_post($post)->post_content)]);
+$check('saving blocks in the same order leaves the schema alone', md5(get_post_meta($post, '_page_generator_schema', true)) === $order_hash);
+
+$call('PUT', $route, ['schema' => $sync_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$order_tree = json_decode(get_post_meta($post, '_elementor_data', true), true);
+$reverse_elements = function (&$nodes) use (&$reverse_elements) {
+    foreach ($nodes as &$n) {
+        if (($n['id'] ?? '') === 's1' && !empty($n['elements'])) $n['elements'] = array_reverse($n['elements']);
+        elseif (!empty($n['elements'])) $reverse_elements($n['elements']);
+    }
+    unset($n);
+};
+$reversed_tree = $order_tree;
+$reverse_elements($reversed_tree);
+update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($reversed_tree)));
+call_user_func($el_sync, $stub, ['elements' => $reversed_tree]);
+$check('elements moved in Elementor reorder their nodes', $child_ids('s1') === ['b1', 't2', 't1']);
+
 $call('PUT', $route, ['schema' => $schema, 'editorMode' => 'gutenberg']);
 $call('PUT', $route, ['schema' => $schema]);
 exit($failed ? 1 : 0);

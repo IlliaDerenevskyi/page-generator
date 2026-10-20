@@ -70,7 +70,7 @@ trait Page_Generator_Block_Sync {
         if (!empty($schema['variants']['mobile']['sections']) && is_array($schema['variants']['mobile']['sections'])) {
             $this->sync_index($schema['variants']['mobile']['sections'], $index);
         }
-        $state = ['changed' => false, 'seen' => [], 'created' => false, 'index' => &$index];
+        $state = ['changed' => false, 'seen' => [], 'created' => false, 'orders' => [], 'index' => &$index];
         $blocks = $this->sync_walk($blocks, ['x' => 0, 'y' => 0], null, $state);
         // Nodes whose block is gone.
         $removed = array_values(array_diff($previous, array_keys($state['seen'])));
@@ -81,6 +81,13 @@ trait Page_Generator_Block_Sync {
             }
         }
         unset($state['index']);
+        // The order of the blocks is the order of the nodes (in a flow page it is the layout itself).
+        if ($state['orders']) {
+            foreach (['sections'] as $key) $schema[$key] = $this->sync_apply_orders($schema[$key] ?? [], $state['orders'], $state);
+            if (!empty($schema['variants']['mobile']['sections'])) {
+                $schema['variants']['mobile']['sections'] = $this->sync_apply_orders($schema['variants']['mobile']['sections'], $state['orders'], $state);
+            }
+        }
         return ['schema' => $schema, 'changed' => $state['changed'], 'content' => $state['created'] ? serialize_blocks($blocks) : null];
     }
 
@@ -120,6 +127,8 @@ trait Page_Generator_Block_Sync {
             $id = is_string($attrs['pgId'] ?? null) ? $attrs['pgId'] : '';
             $box = is_array($attrs['pgBox'] ?? null) ? $attrs['pgBox'] : null;
             if ($id !== '' && isset($state['seen'][$id])) $id = ''; // a duplicated block is a new node
+            // A form is one dynamic block holding its whole node tree in an attribute: the fields edited there are read from the attribute.
+            if (($block['blockName'] ?? '') === 'page-generator/component' && is_array($attrs['node'] ?? null) && $this->sync_component_tree($attrs['node'], $state)) $state['changed'] = true;
             $absolute = null;
             $own_origin = $origin;
             if ($box && isset($box['x'], $box['y'], $box['w'], $box['h'])) {
@@ -155,9 +164,116 @@ trait Page_Generator_Block_Sync {
             if (!empty($block['innerBlocks'])) {
                 $inner = $this->sync_walk($block['innerBlocks'], $own_origin, ($id !== '' && isset($state['index'][$id])) ? $id : $parent_id, $state);
                 $blocks[$key]['innerBlocks'] = $inner;
+                if ($id !== '' && isset($state['index'][$id])) {
+                    $order = [];
+                    foreach ($inner as $child_block) {
+                        $child_id = is_string($child_block['attrs']['pgId'] ?? null) ? $child_block['attrs']['pgId'] : '';
+                        if ($child_id !== '' && isset($state['seen'][$child_id])) $order[] = $child_id;
+                    }
+                    if (count($order) > 1) $state['orders'][$id] = $order;
+                }
             }
         }
         return $blocks;
+    }
+
+    // Puts the children of each node listed in $orders (parent id => child ids in the wanted order) in that order. Children that are not in the
+    // list keep their place; the listed ones fill the places the listed ones held, in the new order. Sets $state['changed'] when something moved.
+    private function sync_apply_orders($nodes, $orders, &$state) {
+        foreach ($nodes as $index => $node) {
+            if (!is_array($node)) continue;
+            foreach (['children', 'elements'] as $key) {
+                if (empty($node[$key]) || !is_array($node[$key])) continue;
+                $node[$key] = $this->sync_apply_orders($node[$key], $orders, $state);
+            }
+            $id = (string) ($node['id'] ?? '');
+            if ($id !== '' && isset($orders[$id])) {
+                foreach (['children', 'elements'] as $key) {
+                    if (empty($node[$key]) || !is_array($node[$key])) continue;
+                    $slots = [];
+                    $items = [];
+                    foreach ($node[$key] as $slot => $child) {
+                        $child_id = is_array($child) ? (string) ($child['id'] ?? '') : '';
+                        if ($child_id !== '' && in_array($child_id, $orders[$id], true)) { $slots[] = $slot; $items[$child_id] = $child; }
+                    }
+                    $sorted = [];
+                    foreach ($orders[$id] as $child_id) if (isset($items[$child_id])) $sorted[] = $items[$child_id];
+                    if (count($sorted) !== count($slots) || count($slots) < 2) continue;
+                    $moved = false;
+                    foreach ($slots as $position => $slot) {
+                        if (($node[$key][$slot]['id'] ?? '') !== ($sorted[$position]['id'] ?? '')) $moved = true;
+                        $node[$key][$slot] = $sorted[$position];
+                    }
+                    if ($moved) $state['changed'] = true;
+                }
+            }
+            $nodes[$index] = $node;
+        }
+        return $nodes;
+    }
+
+    // ---- Forms ---------------------------------------------------------------------------------------------------------------
+
+    // The editable parts of a form field or a form button: caption, placeholder, required flag, button text. Only the keys present in
+    // $values are applied; returns true when the node changed.
+    private function sync_form_fields(&$node, $values) {
+        $changed = false;
+        foreach (['label', 'placeholder'] as $key) {
+            if (array_key_exists($key, $values) && (string) ($node[$key] ?? '') !== (string) $values[$key]) { $node[$key] = (string) $values[$key]; $changed = true; }
+        }
+        if (array_key_exists('required', $values) && !empty($node['required']) !== (bool) $values['required']) {
+            if ($values['required']) $node['required'] = true; else unset($node['required']);
+            $changed = true;
+        }
+        if (array_key_exists('text', $values) && (string) ($node['text'] ?? ($node['content'] ?? '')) !== (string) $values['text']) {
+            $node['text'] = (string) $values['text'];
+            $node['content'] = (string) $values['text'];
+            $changed = true;
+        }
+        return $changed;
+    }
+
+    // Applies fields read from markup (id => values) to a node and every node below it.
+    private function sync_form_tree(&$node, $parsed) {
+        $changed = false;
+        $id = (string) ($node['id'] ?? '');
+        if ($id !== '' && isset($parsed[$id]) && in_array($node['type'] ?? '', ['form-field', 'button'], true)) {
+            $changed = $this->sync_form_fields($node, $parsed[$id]);
+        }
+        foreach (['children', 'elements'] as $key) {
+            if (empty($node[$key]) || !is_array($node[$key])) continue;
+            foreach ($node[$key] as &$child) {
+                if (is_array($child) && $this->sync_form_tree($child, $parsed)) $changed = true;
+            }
+            unset($child);
+        }
+        return $changed;
+    }
+
+    // The node tree a component block carries, read onto the schema nodes of the same ids.
+    private function sync_component_tree($block_node, &$state) {
+        $changed = false;
+        $id = (string) ($block_node['id'] ?? '');
+        if ($id !== '' && isset($state['index'][$id])) {
+            $state['seen'][$id] = true;
+            if (in_array($block_node['type'] ?? '', ['form-field', 'button'], true)) {
+                $values = [];
+                foreach (['label', 'placeholder'] as $key) if (array_key_exists($key, $block_node)) $values[$key] = $block_node[$key];
+                $values['required'] = !empty($block_node['required']);
+                if (($block_node['type'] ?? '') === 'button') $values['text'] = (string) ($block_node['text'] ?? ($block_node['content'] ?? ''));
+                if (($block_node['type'] ?? '') === 'button') unset($values['required'], $values['label'], $values['placeholder']);
+                foreach ($state['index'][$id] as &$ref) {
+                    if ($this->sync_form_fields($ref, $values)) $changed = true;
+                }
+                unset($ref);
+            }
+        }
+        foreach (['children', 'elements'] as $key) {
+            foreach ((array) ($block_node[$key] ?? []) as $child) {
+                if (is_array($child) && $this->sync_component_tree($child, $state)) $changed = true;
+            }
+        }
+        return $changed;
     }
 
     // ---- Reading a block ---------------------------------------------------------------------------------------------------

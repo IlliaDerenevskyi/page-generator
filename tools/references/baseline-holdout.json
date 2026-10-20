@@ -1,8 +1,8 @@
 {
   "bootstrap.png": {
-    "visual": 72.55,
-    "perceptual": 94.07,
-    "content": 61.08,
+    "visual": 72.52,
+    "perceptual": 94.03,
+    "content": 60.92,
     "worstZone": 33,
     "text": 99.44,
     "dom": 89.66
@@ -10,7 +10,7 @@
   "diia.png": {
     "visual": 86.88,
     "perceptual": 95.27,
-    "content": 78.81,
+    "content": 78.84,
     "worstZone": 21,
     "text": 100,
     "dom": 89.76
@@ -24,24 +24,16 @@
     "dom": 90.84
   },
   "hacker-news.png": {
-    "visual": 65.77,
+    "visual": 65.76,
     "perceptual": 96.31,
-    "content": 82.99,
+    "content": 82.91,
     "worstZone": 25,
     "text": 100,
     "dom": 70.71
   },
-  "mdn-flexbox.png": {
-    "visual": 86.26,
-    "perceptual": 94.86,
-    "content": 44.2,
-    "worstZone": 0,
-    "text": 100,
-    "dom": 90.96
-  },
   "python-docs.png": {
     "visual": 85.83,
-    "perceptual": 97.3,
+    "perceptual": 97.29,
     "content": 49.58,
     "worstZone": 7,
     "text": 100,
@@ -56,9 +48,9 @@
     "dom": 93.18
   },
   "ukr-net.png": {
-    "visual": 63.42,
+    "visual": 63.43,
     "perceptual": 85.36,
-    "content": 40.05,
+    "content": 40.01,
     "worstZone": 0,
     "text": 99.8,
     "dom": 93.81

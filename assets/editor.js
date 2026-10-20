@@ -41,15 +41,58 @@
                     ];
                     if (label) children.push(createElement('div', { className: 'page-generator-block-text', key: 'text' }, label));
                     children.push(createElement(InnerBlocks, { key: 'inner' }));
-                    return createElement('div', {
+                    var preview = createElement('div', {
                         className: 'page-generator-block-editor-preview is-' + String(type).replace(/[^a-z0-9-]/gi, '')
                     }, children);
+                    var panel = block.name === 'page-generator/component' ? formInspector(props) : null;
+                    return panel ? createElement(wp.element.Fragment, null, panel, preview) : preview;
                 },
                 save: function () {
                     return createElement(InnerBlocks.Content, null);
                 }
             });
         });
+    }
+
+    // A form lives in one component block that holds its whole node tree; its fields (caption, placeholder, required, submit text) are edited
+    // in the block's sidebar and travel back into the schema with the post (see includes/block-sync.php).
+    function formInspector(props) {
+        var node = props.attributes.node;
+        if (!node || !wp.components || !wp.blockEditor || !wp.blockEditor.InspectorControls) return null;
+        var fields = [];
+        (function collect(current) {
+            if (!current) return;
+            if (current.type === 'form-field' || (current.type === 'button' && current !== node && current.id)) fields.push(current);
+            (current.children && current.children.length ? current.children : current.elements || []).forEach(collect);
+        }(node));
+        if (!fields.length) return null;
+        var update = function (id, patch) {
+            var copy = JSON.parse(JSON.stringify(node));
+            (function apply(current) {
+                if (!current) return;
+                if (current.id === id) {
+                    Object.keys(patch).forEach(function (key) { if (key === 'required' && !patch[key]) delete current.required; else current[key] = patch[key]; });
+                    if (patch.text !== undefined) current.content = patch.text;
+                }
+                ['children', 'elements'].forEach(function (key) { (current[key] || []).forEach(apply); });
+            }(copy));
+            props.setAttributes({ node: copy });
+        };
+        var h = wp.element.createElement;
+        var C = wp.components;
+        var controls = [];
+        fields.forEach(function (field) {
+            var rows = [];
+            if (field.type === 'button') {
+                rows.push(h(C.TextControl, { key: 'text', label: 'Текст кнопки', value: String(field.text || field.content || ''), onChange: function (value) { update(field.id, { text: value }); } }));
+            } else {
+                rows.push(h(C.TextControl, { key: 'label', label: 'Підпис', value: String(field.label || ''), onChange: function (value) { update(field.id, { label: value }); } }));
+                if (field.fieldType !== 'checkbox') rows.push(h(C.TextControl, { key: 'placeholder', label: 'Підказка', value: String(field.placeholder || ''), onChange: function (value) { update(field.id, { placeholder: value }); } }));
+                rows.push(h(C.ToggleControl, { key: 'required', label: 'Обов\u2019язкове', checked: !!field.required, onChange: function (value) { update(field.id, { required: !!value }); } }));
+            }
+            controls.push(h(C.PanelBody, { key: field.id, title: field.type === 'button' ? 'Кнопка: ' + String(field.text || field.content || '') : 'Поле: ' + String(field.label || field.placeholder || field.id), initialOpen: fields.length <= 3 }, rows));
+        });
+        return h(wp.blockEditor.InspectorControls, { key: 'inspector' }, controls);
     }
 
     registerEditorBlocks();
@@ -391,11 +434,72 @@
         return 0;
     }
 
+    // One screenshot is one canvas of the page, so a page built from several screenshots is their canvases one under another, each as wide
+    // as the page. The reference for the comparison is then the screenshots stacked the same way (each scaled to the first one's width).
+    function stackedReference(schema) {
+        var firsts = [];
+        var seen = {};
+        (schema.sections || []).forEach(function (section) {
+            var group = section.sourceGroup || 'default';
+            if (seen[group]) return;
+            seen[group] = true;
+            firsts.push(section);
+        });
+        var usable = firsts.filter(function (section) {
+            return section.source && (section.source.url || section.source.attachmentId) && section.settings && Number(section.settings.sourceWidth) > 0 && Number(section.settings.sourceHeight) > 0;
+        });
+        if (firsts.length < 2 || usable.length !== firsts.length) return Promise.resolve(null);
+        var width = Number(usable[0].settings.sourceWidth);
+        var heights = usable.map(function (section) { return Math.round(Number(section.settings.sourceHeight) * width / Number(section.settings.sourceWidth)); });
+        var total = heights.reduce(function (sum, value) { return sum + value; }, 0);
+        if (total > 16000 || width * total > 40000000) return Promise.resolve(null);
+        var loadImage = function (section) {
+            return new Promise(function (resolve, reject) {
+                var image = new Image();
+                image.onload = function () { resolve(image); };
+                image.onerror = function () { reject(new Error('Не вдалося завантажити reference ' + (section.source.url || ''))); };
+                image.src = section.source.url;
+            });
+        };
+        return Promise.all(usable.map(loadImage)).then(function (images) {
+            var canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = total;
+            var context = canvas.getContext('2d');
+            var top = 0;
+            images.forEach(function (image, index) {
+                context.drawImage(image, 0, top, width, heights[index]);
+                top += heights[index];
+            });
+            return new Promise(function (resolve, reject) {
+                canvas.toBlob(function (blob) {
+                    if (!blob) { reject(new Error('Не вдалося зібрати спільний reference.')); return; }
+                    var form = new FormData();
+                    form.append('action', 'page_generator_upload_asset');
+                    form.append('nonce', PageGeneratorConfig.nonce);
+                    form.append('asset', blob, 'stacked-reference.png');
+                    $.ajax({ url: PageGeneratorConfig.ajaxUrl, method: 'POST', data: form, processData: false, contentType: false })
+                        .done(function (response) {
+                            if (response.success) resolve({ url: response.data.url, attachmentId: response.data.id, width: width, height: total });
+                            else reject(new Error('Не вдалося завантажити спільний reference.'));
+                        })
+                        .fail(function () { reject(new Error('Не вдалося завантажити спільний reference.')); });
+                }, 'image/png');
+            });
+        });
+    }
+
     function compareRenderedPage(url, schema, postId) {
-        var section = schema.sections && schema.sections[0];
-        var source = section && section.source ? section.source : {};
-        var width = section && section.settings ? Number(section.settings.sourceWidth || 0) : 0;
-        var height = section && section.settings ? Number(section.settings.sourceHeight || 0) : 0;
+        return stackedReference(schema).then(function (stacked) {
+            var section = schema.sections && schema.sections[0];
+            var source = stacked ? { url: stacked.url, attachmentId: stacked.attachmentId } : (section && section.source ? section.source : {});
+            var width = stacked ? stacked.width : (section && section.settings ? Number(section.settings.sourceWidth || 0) : 0);
+            var height = stacked ? stacked.height : (section && section.settings ? Number(section.settings.sourceHeight || 0) : 0);
+            return requestComparison(url, schema, postId, source, width, height);
+        });
+    }
+
+    function requestComparison(url, schema, postId, source, width, height) {
         if (!url || (!source.url && !source.attachmentId) || !width || !height) {
             return Promise.reject(new Error('Для Playwright-порівняння потрібні URL сторінки, reference image та його розміри. Отримано: URL=' + (url ? 'так' : 'ні') + ', reference=' + ((source.url || source.attachmentId) ? 'так' : 'ні') + ', розмір=' + (width && height ? width + 'x' + height : 'відсутній') + '.'));
         }
@@ -660,7 +764,7 @@
                 // The mobile screenshots become a second layout of the same page, shown below the mobile breakpoint.
                 schema.variants = { mobile: { sections: buildScreenshotPageSchema(split.mobile, $('#pg-source-description').val()).sections } };
             }
-            return uploadBackdrops(schema).then(function () { return { schema: schema, analyses: analyses }; });
+            return uploadBackdrops(schema).then(function () { return uploadGradientImages(schema); }).then(function () { return { schema: schema, analyses: analyses }; });
         }).then(function (built) {
             var schema = built.schema, analyses = built.analyses;
             $('#page-generator-modal').data('schema', schema);
@@ -738,6 +842,52 @@
         }));
     }
 
+    // Elementor draws a gradient of two colours (three with an overlay layer). A ramp with more stops is also painted into a picture, which the
+    // Elementor export uses as the background; Gutenberg and HTML keep the exact CSS gradient and ignore the picture.
+    function uploadGradientImages(schema) {
+        var targets = [];
+        var walk = function (nodes) {
+            (nodes || []).forEach(function (node) {
+                if (node && node.style && node.style.gradient && node.style.gradient.stops && node.style.gradient.stops.length > 3 && node.bbox && node.bbox.width > 0 && node.bbox.height > 0) targets.push(node);
+                if (node) walk(node.children && node.children.length ? node.children : node.elements);
+            });
+        };
+        walk(schema.sections);
+        if (schema.variants && schema.variants.mobile) walk(schema.variants.mobile.sections);
+        return Promise.all(targets.map(function (node, index) {
+            var gradient = node.style.gradient;
+            return new Promise(function (resolve) {
+                var width = Math.max(16, Math.min(960, Math.round(node.bbox.width / 2)));
+                var height = Math.max(8, Math.min(960, Math.round(width * node.bbox.height / node.bbox.width)));
+                var canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                var context = canvas.getContext('2d');
+                // CSS gradient line: through the centre at the angle, as long as the box's extent along it.
+                var rad = (Number(gradient.angle) || 0) * Math.PI / 180;
+                var dx = Math.sin(rad), dy = -Math.cos(rad);
+                var half = (Math.abs(width * dx) + Math.abs(height * dy)) / 2;
+                var line = context.createLinearGradient(width / 2 - dx * half, height / 2 - dy * half, width / 2 + dx * half, height / 2 + dy * half);
+                gradient.stops.forEach(function (stop) { line.addColorStop(Math.max(0, Math.min(1, Number(stop.pos) / 100)), stop.color); });
+                context.fillStyle = line;
+                context.fillRect(0, 0, width, height);
+                canvas.toBlob(function (blob) {
+                    if (!blob) { resolve(); return; }
+                    var form = new FormData();
+                    form.append('action', 'page_generator_upload_asset');
+                    form.append('nonce', PageGeneratorConfig.nonce);
+                    form.append('asset', blob, 'detected-gradient-' + index + '.png');
+                    $.ajax({ url: PageGeneratorConfig.ajaxUrl, method: 'POST', data: form, processData: false, contentType: false })
+                        .done(function (response) {
+                            if (response.success) node.style.gradientImage = { url: response.data.url, attachmentId: response.data.id };
+                            resolve();
+                        })
+                        .fail(function () { resolve(); });
+                }, 'image/png');
+            });
+        }));
+    }
+
     function analyzeScreenshot(file, uploadedData) {
         return new Promise(function (resolve, reject) {
             var reader = new FileReader();
@@ -768,6 +918,7 @@
                         results[0] = results[0].filter(function (word) { return !window.PageGeneratorDetectors.isRuleWord(word); });
                         mergePhotoRegions(canvas, results[1], window.PageGeneratorDetectors.detectPhotoRegions(pixelData, canvas.width, canvas.height, results[0]));
                         var softBoxes = dropSoftBackdropPhotos(pixelData, canvas, results[1], results[0], surfaces);
+                        softBoxes = softBoxes.concat(gradientBandBackdrops(pixelData, canvas, results, surfaces, softBoxes));
                         return recognizeOverBackdrop(canvas, softBoxes, results[0]).then(function (extra) {
                             results[0] = results[0].concat(extra);
                             return results;
@@ -842,6 +993,29 @@
             }
         }
         return dropped;
+    }
+
+    // White headlines on a colourful multi-stop ramp (a rainbow or sunset band) are missed by the plain OCR pass just like those on a mesh.
+    // Bands that are one ramp of three stops or more get the same treatment: the ramp they paint is taken away before the text is read.
+    function gradientBandBackdrops(pixelData, canvas, results, surfaces, existing) {
+        var tools = window.PageGeneratorDetectors;
+        var light = { width: canvas.width, height: canvas.height, canvas: canvas, pixels: pixelData, words: results[0], surfaces: surfaces, boxes: results[1].boxes };
+        var bands = mergeGradientBands(light, joinThinRuns(light, results[1].sections || []).filter(function (band) { return band.height >= canvas.width * .02; }));
+        var found = [];
+        bands.forEach(function (band) {
+            if (band.height < 120) return;
+            var box = { x: 0, y: band.y, width: canvas.width, height: band.height };
+            if ((existing || []).some(function (soft) { return boxOverlapRatio(soft.box, box) > .5; })) return;
+            var ramp = tools.detectLinearGradient(pixelData, canvas.width, canvas.height, box);
+            if (!isStrongRamp(ramp)) return;
+            found.push({
+                box: box, backdrop: tools.gradientGrid(ramp, box),
+                plates: (surfaces || []).filter(function (surface) {
+                    return ['button', 'badge', 'input'].indexOf(surface.kind) !== -1 && surface.x < box.x + box.width && surface.x + surface.width > box.x && surface.y < box.y + box.height && surface.y + surface.height > box.y;
+                })
+            });
+        });
+        return found;
     }
 
     // Text sitting on a soft backdrop (white headline on a gradient) defeats the plain OCR pass. Here the backdrop is subtracted first, so the
@@ -1804,6 +1978,42 @@
         return rects;
     }
 
+    // A colourful ramp of three or more stops (rainbow, sunset): the kind plain two-stop reading and plain OCR cannot cope with.
+    function isStrongRamp(ramp) {
+        if (!ramp || ramp.stops.length < 3) return false;
+        var colors = ramp.stops.map(function (stop) { return [1, 3, 5].map(function (at) { return parseInt(stop.color.slice(at, at + 2), 16); }); });
+        var range = 0;
+        colors.forEach(function (a) { colors.forEach(function (b) { range = Math.max(range, Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) + Math.abs(a[2] - b[2])); }); });
+        return range >= 240;
+    }
+
+    // A strong ramp is cut into many thin slices (a few pixels each) wherever the colour moves, and slices below the minimum band height
+    // are dropped before merging. A run of touching thin slices that together form one strong ramp is joined into a single band first.
+    function joinThinRuns(analysis, bands) {
+        var tools = window.PageGeneratorDetectors;
+        var pixels = analysisPixels(analysis);
+        var out = [];
+        var index = 0;
+        while (index < bands.length) {
+            var end = index;
+            if (bands[index].height < 40) {
+                while (end + 1 < bands.length && bands[end + 1].height < 40 && Math.abs(bands[end + 1].y - (bands[end].y + bands[end].height)) <= 2) end += 1;
+            }
+            var top = bands[index].y, height = bands[end].y + bands[end].height - top;
+            if (end - index >= 5 && height >= 120) {
+                var span = { x: 0, y: top, width: analysis.width, height: height };
+                if (isStrongRamp(tools.detectLinearGradient(pixels, analysis.width, analysis.height, span))) {
+                    out.push({ y: top, height: height, background: bands[index].background });
+                    index = end + 1;
+                    continue;
+                }
+            }
+            out.push(bands[index]);
+            index += 1;
+        }
+        return out;
+    }
+
     // Bands are cut wherever the colour changes, so a gradient background arrives as several slices. Neighbouring bands whose union is
     // one linear ramp are joined back into a single band (the longest such run starting at each band).
     function mergeGradientBands(analysis, bands) {
@@ -1836,7 +2046,7 @@
     }
 
     function splitIntoSections(analysis, semantic, uploadedData, textElements) {
-        var detected = mergeGradientBands(analysis, (analysis.sections || []).filter(function (band) { return band.height >= analysis.width * .02; }));
+        var detected = mergeGradientBands(analysis, joinThinRuns(analysis, analysis.sections || []).filter(function (band) { return band.height >= analysis.width * .02; }));
         // A colour band can hold a whole page body (same background), so each band is also split at its own content gaps.
         var bands = detected.length < 2 ? deriveContentBands(semantic.elements, analysis) : detected.reduce(function (all, band) {
             var inside = semantic.elements.filter(function (node) {

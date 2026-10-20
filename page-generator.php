@@ -1302,13 +1302,36 @@ final class Page_Generator_Plugin {
         ];
         $fill = $style['background'] ?? ($node['background'] ?? '');
         $gradient = is_array($style['gradient'] ?? null) && !empty($style['gradient']['stops']) && count($style['gradient']['stops']) >= 2 ? $style['gradient'] : null;
-        if ($gradient) {
+        $gradient_image = $gradient && count($gradient['stops']) > 3 && is_array($style['gradientImage'] ?? null) ? esc_url_raw($style['gradientImage']['url'] ?? '') : '';
+        if ($gradient && $gradient_image) {
+            // More than three stops cannot be drawn with Elementor's two layers: the detected ramp is a picture of exactly that size.
+            $out['background_background'] = 'classic';
+            $out['background_color'] = $this->normalize_color($gradient['stops'][0]['color'] ?? '#ffffff');
+            $out['background_image'] = ['url' => $gradient_image, 'id' => absint($style['gradientImage']['attachmentId'] ?? 0)];
+            $out['background_position'] = 'center center';
+            $out['background_repeat'] = 'no-repeat';
+            $out['background_size'] = 'cover';
+        } elseif ($gradient) {
             // Elementor's native gradient has two stops. A ramp with a middle stop is built from two layers: the background runs from the first
             // colour to the middle one (and stays there), and the overlay fades the last colour in over it from the middle stop on.
             $stops = $gradient['stops'];
             $first = $stops[0];
             $last = end($stops);
-            $middle = count($stops) >= 3 ? $stops[(int) floor(count($stops) / 2)] : null;
+            // Elementor can draw two segments (three stops). A longer ramp keeps its ends and the one middle stop that bends the line most.
+            $middle = null;
+            if (count($stops) >= 3) {
+                $rgb = function ($color) { $c = ltrim($this->normalize_color($color), '#'); return strlen($c) === 6 ? [hexdec(substr($c, 0, 2)), hexdec(substr($c, 2, 2)), hexdec(substr($c, 4, 2))] : [0, 0, 0]; };
+                $a = $rgb($first['color'] ?? '#ffffff');
+                $b = $rgb($last['color'] ?? '#ffffff');
+                $worst = -1;
+                for ($i = 1; $i < count($stops) - 1; $i++) {
+                    $f = max(0, min(1, ((float) ($stops[$i]['pos'] ?? 50)) / 100));
+                    $c = $rgb($stops[$i]['color'] ?? '#ffffff');
+                    $miss = 0;
+                    for ($k = 0; $k < 3; $k++) $miss += abs($c[$k] - ($a[$k] * (1 - $f) + $b[$k] * $f));
+                    if ($miss > $worst) { $worst = $miss; $middle = $stops[$i]; }
+                }
+            }
             $angle = ((int) ($gradient['angle'] ?? 180)) % 360;
             $percent = function ($value) { return ['unit' => '%', 'size' => max(0, min(100, (int) $value)), 'sizes' => []]; };
             $out['background_background'] = 'gradient';
@@ -1535,7 +1558,7 @@ final class Page_Generator_Plugin {
                     $has_submit = true;
                     $button_position = $form_dims && !empty($child['bbox']) ? $this->render_box_position_style($child, $form_dims) : 'width:100%;';
                     $button_style = $button_position . $this->render_surface_style($child) . 'min-height:' . $this->scaled_px(max(36, absint($child['bbox']['height'] ?? 0))) . ';border:0;cursor:pointer;white-space:nowrap;font-size:' . $this->font_size_css(absint($child['style']['fontSize'] ?? 16), $dimensions) . ';';
-                    $fields .= "\n" . '<button type="submit" class="page-generator-block page-generator-button-node" style="' . esc_attr($button_style) . '">' . esc_html($child['text'] ?? ($child['content'] ?? '')) . '</button>';
+                    $fields .= "\n" . '<button type="submit" class="page-generator-block page-generator-button-node" data-block-id="' . esc_attr(sanitize_html_class($child['id'] ?? '')) . '" data-block-type="button" style="' . esc_attr($button_style) . '">' . esc_html($child['text'] ?? ($child['content'] ?? '')) . '</button>';
                     continue;
                 }
                 $fields .= "\n" . $this->render_node($child, $form_dims);
@@ -1678,7 +1701,7 @@ final class Page_Generator_Plugin {
         $gradient = is_array($style['gradient'] ?? null) ? $style['gradient'] : null;
         if (!$gradient || empty($gradient['stops']) || !is_array($gradient['stops']) || count($gradient['stops']) < 2) return '';
         $parts = [];
-        foreach (array_slice($gradient['stops'], 0, 4) as $stop) {
+        foreach (array_slice($gradient['stops'], 0, 6) as $stop) {
             if (!is_array($stop) || !isset($stop['color'])) return '';
             $parts[] = $this->normalize_color($stop['color']) . ' ' . max(0, min(100, (int) ($stop['pos'] ?? 0))) . '%';
         }

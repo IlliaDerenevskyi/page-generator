@@ -53,7 +53,7 @@ trait Page_Generator_Elementor_Sync {
         if (!empty($schema['variants']['mobile']['sections']) && is_array($schema['variants']['mobile']['sections'])) {
             $this->sync_index($schema['variants']['mobile']['sections'], $index);
         }
-        $state = ['changed' => false, 'seen' => [], 'index' => &$index];
+        $state = ['changed' => false, 'seen' => [], 'orders' => [], 'index' => &$index];
         $this->elsync_walk($elements, ['x' => 0, 'y' => 0], null, $state);
         // Nodes whose element is gone (the node itself or its plate).
         $removed = [];
@@ -70,6 +70,13 @@ trait Page_Generator_Elementor_Sync {
             }
         }
         unset($state['index']);
+        // The order of the elements inside a container is the order of its nodes.
+        if ($state['orders']) {
+            if (!empty($schema['sections'])) $schema['sections'] = $this->sync_apply_orders($schema['sections'], $state['orders'], $state);
+            if (!empty($schema['variants']['mobile']['sections'])) {
+                $schema['variants']['mobile']['sections'] = $this->sync_apply_orders($schema['variants']['mobile']['sections'], $state['orders'], $state);
+            }
+        }
         return ['schema' => $schema, 'changed' => $state['changed']];
     }
 
@@ -118,6 +125,15 @@ trait Page_Generator_Elementor_Sync {
             }
             if (!empty($element['elements'])) {
                 $this->elsync_walk($element['elements'], $own_origin, $node_id !== null ? $node_id : $parent_id, $state);
+                if ($node_id !== null) {
+                    $order = [];
+                    foreach ($element['elements'] as $child) {
+                        $child_element = is_array($child) ? (string) ($child['id'] ?? '') : '';
+                        $child_node = isset($state['index'][$child_element]) ? $child_element : (substr($child_element, -1) === 'p' && isset($state['index'][substr($child_element, 0, -1)]) ? substr($child_element, 0, -1) : '');
+                        if ($child_node !== '' && !in_array($child_node, $order, true)) $order[] = $child_node;
+                    }
+                    if (count($order) > 1) $state['orders'][$node_id] = $order;
+                }
             }
         }
     }
@@ -128,6 +144,47 @@ trait Page_Generator_Elementor_Sync {
         $html = preg_replace('#<br\s*/?>#i', "\n", (string) $html);
         $html = preg_replace('#</p>\s*<p[^>]*>#i', "\n", $html);
         return trim(html_entity_decode(wp_strip_all_tags($html), ENT_QUOTES, 'UTF-8'));
+    }
+
+    // Fields of a built-in form read from its markup: id => [label, placeholder, required] (a button: [text]).
+    private function elsync_parse_form($html) {
+        $found = [];
+        if (trim($html) === '' || !class_exists('DOMDocument')) return $found;
+        $previous = libxml_use_internal_errors(true);
+        $dom = new DOMDocument();
+        $dom->loadHTML('<?xml encoding="utf-8"?><body>' . $html . '</body>');
+        libxml_clear_errors();
+        libxml_use_internal_errors($previous);
+        $xpath = new DOMXPath($dom);
+        $text = function ($element) { return trim(preg_replace('/\s+/', ' ', $element->textContent)); };
+        foreach ($xpath->query('//*[@data-block-id][@data-block-type]') as $element) {
+            $id = $element->getAttribute('data-block-id');
+            $type = $element->getAttribute('data-block-type');
+            if ($type === 'button') {
+                $found[$id] = ['text' => $text($element)];
+                continue;
+            }
+            if ($type !== 'form-field') continue;
+            $control = $xpath->query('.//input|.//select|.//textarea', $element)->item(0);
+            if (!$control) continue;
+            $required = $control->hasAttribute('required');
+            $mark = trim($text($xpath->query('.//*[contains(@class,"page-generator-required")]', $element)->item(0) ?: $dom->createTextNode('')));
+            $strip = function ($value) use ($mark) { return trim(preg_replace('/\s*\*$/', '', $mark !== '' ? preg_replace('/' . preg_quote($mark, '/') . '$/', '', trim($value)) : trim($value))); };
+            $values = ['required' => $required];
+            if ($control->getAttribute('type') === 'checkbox') {
+                $values['label'] = $strip($text($element));
+            } else {
+                $caption = null;
+                foreach ($xpath->query('./span[not(contains(@class,"page-generator-required"))]', $element) as $span) { $caption = $span; break; }
+                if ($caption) $values['label'] = $strip($text($caption));
+                $placeholder = $control->nodeName === 'select' ? $text($xpath->query('.//option', $control)->item(0) ?: $dom->createTextNode('')) : $control->getAttribute('placeholder');
+                // Without a caption the asterisk of a required field lives in the placeholder.
+                if (!$caption && $required) $placeholder = preg_replace('/\s*\*$/', '', $placeholder);
+                $values['placeholder'] = $placeholder;
+            }
+            $found[$id] = $values;
+        }
+        return $found;
     }
 
     private function elsync_radius($value) {
@@ -184,6 +241,10 @@ trait Page_Generator_Elementor_Sync {
                 $radius = $this->elsync_radius($settings['border_radius'] ?? null);
                 if ($radius !== null && $radius !== absint($style['borderRadius'] ?? 0)) $set('borderRadius', $radius);
             }
+        } elseif ($widget === 'html' && in_array($node['type'] ?? '', ['form', 'form-field'], true)) {
+            // The built-in form is an HTML widget: its fields carry the id of their node, and their captions, placeholders and
+            // required flags are read back from the markup.
+            if ($this->sync_form_tree($node, $this->elsync_parse_form((string) ($settings['html'] ?? '')))) $changed = true;
         } elseif ($widget === 'image') {
             $url = $settings['image']['url'] ?? '';
             if ($url && ($node['url'] ?? ($node['asset']['url'] ?? '')) !== $url) { $node['url'] = esc_url_raw($url); $changed = true; }

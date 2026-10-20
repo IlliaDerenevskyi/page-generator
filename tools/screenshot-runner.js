@@ -306,14 +306,40 @@ async function main() {
         // 'networkidle' never settles on a live site (background polling), so the wait is bounded to the load event
         // and the canvas itself. The whole run has to finish inside the web request, which nginx cuts at 60 s.
         await page.goto(url, { waitUntil: 'load', timeout: 25000 });
-        const canvas = page.locator('[data-page-generator="canvas"], .page-generator-canvas, .pg-flow-page, .pg-el-flow').locator('visible=true').first();
-        await canvas.waitFor({ state: 'attached', timeout: 20000 }).catch(() => {});
-        if (!await canvas.count()) {
+        const visibleCanvases = page.locator('[data-page-generator="canvas"], .page-generator-canvas, .pg-flow-page, .pg-el-flow').locator('visible=true');
+        await visibleCanvases.first().waitFor({ state: 'attached', timeout: 20000 }).catch(() => {});
+        if (!await visibleCanvases.count()) {
             throw new Error('Generated page canvas was not found; comparison cannot be scoped safely.');
         }
+        // A page built from several screenshots is one canvas per screenshot, one under another; they are pinned together as one stack so
+        // the screenshot covers all of them (the reference is the screenshots stacked the same way).
+        const stacked = await visibleCanvases.count() > 1 && await visibleCanvases.evaluateAll((elements) => elements.every((element) => element.classList.contains('page-generator-canvas')));
+        if (stacked) {
+            await page.evaluate(() => {
+                const list = Array.from(document.querySelectorAll('.page-generator-canvas')).filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden');
+                const box = document.createElement('div');
+                box.id = 'pg-compare-stack';
+                box.style.cssText = 'position:fixed;left:0;top:0;width:100vw;z-index:2147483647;background:#ffffff;';
+                list.forEach((element) => {
+                    box.appendChild(element);
+                    const source = /(?:^|\s)pg-w-(\d+)(?:\s|$)/.exec(element.className);
+                    if (element.classList.contains('pg-el-canvas') && source) {
+                        element.style.cssText += ';width:' + source[1] + 'px;max-width:none;margin:0;';
+                        element.style.setProperty('--pg-zoom', String(window.innerWidth / Number(source[1])));
+                    } else {
+                        element.style.cssText += ';width:100vw;max-width:none;margin:0;zoom:1;';
+                    }
+                });
+                document.body.appendChild(box);
+                document.documentElement.style.overflow = 'hidden';
+                const adminBar = document.getElementById('wpadminbar');
+                if (adminBar) adminBar.style.display = 'none';
+            });
+        }
+        const canvas = stacked ? page.locator('#pg-compare-stack') : visibleCanvases.first();
         // The theme wraps the canvas in a header, margins and a footer; pin the canvas to the viewport so the screenshot
         // lines up pixel for pixel with the reference instead of comparing the whole themed page.
-        await canvas.evaluate((element) => {
+        if (!stacked) await canvas.evaluate((element) => {
             // An Elementor canvas is a px layout at its source width, zoomed to fit (assets/canvas-scale.js zooms it to its parent, which is
             // not the viewport here): give it the source width and the zoom that makes it exactly as wide as the viewport.
             const source = /(?:^|\s)pg-w-(\d+)(?:\s|$)/.exec(element.className);

@@ -1,8 +1,8 @@
 {
   "azure-node-service.png": {
-    "visual": 92.34,
+    "visual": 92.33,
     "perceptual": 97.67,
-    "content": 87.18,
+    "content": 87.12,
     "worstZone": 65,
     "text": 100,
     "dom": 97.18
@@ -24,9 +24,9 @@
     "dom": 83.8
   },
   "nodejs-org.png": {
-    "visual": 86.81,
-    "perceptual": 96.1,
-    "content": 63.62,
+    "visual": 86.87,
+    "perceptual": 96.14,
+    "content": 64.67,
     "worstZone": 26,
     "text": 99.12,
     "dom": 86.75
@@ -94,5 +94,21 @@
     "worstZone": 15,
     "text": 100,
     "dom": 88.89
+  },
+  "gradients-multi.png": {
+    "visual": 94.97,
+    "perceptual": 97.86,
+    "content": 91.27,
+    "worstZone": 88,
+    "text": 100,
+    "dom": 66.67
+  },
+  "mdn-flexbox.png": {
+    "visual": 86.26,
+    "perceptual": 94.86,
+    "content": 44.2,
+    "worstZone": 0,
+    "text": 100,
+    "dom": 90.96
   }
 }

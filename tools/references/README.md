@@ -68,16 +68,17 @@ grid cell) and `dom` (a node count that grows when a new element is found) are p
 | | `github-repo` | dense text, file list, light UI |
 | | `lab6` | a plain responsive site: cards, table, form (the "Акустична варта" page) |
 | | `nodejs-org` | large headings, dark/light bands |
+| | `mdn-flexbox` | documentation: sidebar, code blocks, long article (moved here from `holdout/` on 2026-10-21: it was studied by eye to fix a regression, so it no longer counts as unseen) |
 | | `notion-login` | a single outlined email field, buttons |
 | | `gradients-css` | **synthetic** page of our own (source: `gradients-css.html`): CSS linear gradients on a hero, cards and a band; guards the gradient detector and both exporters |
 | | `backdrops-css` | **synthetic** page of our own (source: `backdrops-css.html`): a mesh-gradient hero and a radial-gradient band; guards the soft-backdrop detector (background cut out as a picture, text removed) |
+| | `gradients-multi` | **synthetic** page of our own (source: `gradients-multi.html`): a four-colour and a five-colour ramp; guards multi-stop gradient detection (Gutenberg/HTML keep every stop, Elementor keeps its ends and the middle stop that bends most) |
 | | `fonts-css` | **synthetic** page of our own (source: `fonts-css.html`): serif, sans and monospace lines; guards the font-family detection (serif by stroke contrast, monospace by an equal character pitch) |
 | | `form-required` | **synthetic** page of our own (source: `form-required.html`): a contact form with two fields marked `*`; guards the required-field flag |
 | `heavy/` | `apple-ua` | photographic sections, long page |
 | | `stripe` | gradients, baked-in text, product mockups |
 | | `wikipedia-article` | very small text, serif headings, infobox |
 | `holdout/` | `hacker-news` | plain markup, tiny text, no cards |
-| | `mdn-flexbox` | documentation: sidebar, code blocks, long article |
 | | `python-org` | dark landing, colour bands |
 | | `bootstrap` | pastel gradient landing |
 | | `ukr-net` | dense Cyrillic news portal, ad banners |
