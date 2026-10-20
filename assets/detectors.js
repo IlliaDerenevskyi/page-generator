@@ -998,6 +998,66 @@
         return { data: scaled, width: targetWidth, height: targetHeight, scale: targetWidth / width, textHeight: textHeight };
     }
 
+    // The ukr+eng model confuses Latin and Cyrillic letters that look alike ("Try" read as "Ту", "is" as "із"). A letter that has no twin in the
+    // other script is evidence for its own script; the twins (А/A, о/o, і/i ...) say nothing. A line is judged by the evidence of all its letters.
+    var CYRILLIC_TWINS = { 'А': 'A', 'В': 'B', 'Е': 'E', 'К': 'K', 'М': 'M', 'Н': 'H', 'О': 'O', 'Р': 'P', 'С': 'C', 'Т': 'T', 'Х': 'X', 'У': 'Y', 'І': 'I',
+        'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c', 'х': 'x', 'у': 'y', 'і': 'i', 'з': 's' };
+    var LATIN_TWINS = {};
+    Object.keys(CYRILLIC_TWINS).forEach(function (letter) { if (letter !== 'з') LATIN_TWINS[CYRILLIC_TWINS[letter]] = letter; });
+
+    function scriptEvidence(text) {
+        var latin = 0, cyrillic = 0, anyCyrillic = 0;
+        String(text || '').split('').forEach(function (letter) {
+            if (/[A-Za-z]/.test(letter)) { if (!LATIN_TWINS[letter]) latin += 1; }
+            else if (/[А-Яа-яІіЇїЄєҐґ]/.test(letter)) { anyCyrillic += 1; if (!CYRILLIC_TWINS[letter]) cyrillic += 1; }
+        });
+        return { latin: latin, cyrillic: cyrillic, anyCyrillic: anyCyrillic };
+    }
+
+    // A line that is clearly English but carries Cyrillic letters: worth reading again with the English model alone.
+    function needsLatinReread(text) {
+        var evidence = scriptEvidence(text);
+        return evidence.anyCyrillic > 0 && evidence.latin >= 3 && evidence.cyrillic * 4 <= evidence.latin;
+    }
+
+    // Twin letters inside words of the wrong script are turned into the line's script; a word that holds a letter with no twin is left alone.
+    function unmixScripts(text) {
+        var evidence = scriptEvidence(text);
+        var toLatin = evidence.latin >= 3 && evidence.cyrillic * 4 <= evidence.latin;
+        var toCyrillic = evidence.cyrillic >= 4 && evidence.latin * 4 <= evidence.cyrillic;
+        if (!toLatin && !toCyrillic) return text;
+        return String(text).split(' ').map(function (word) {
+            if (toLatin) {
+                if (!/[А-Яа-яІіЇїЄєҐґ]/.test(word)) return word;
+                var plain = true;
+                word.split('').forEach(function (letter) { if (/[А-Яа-яІіЇїЄєҐґ]/.test(letter) && !CYRILLIC_TWINS[letter]) plain = false; });
+                return plain ? word.replace(/[А-Яа-яІіЇїЄєҐґ]/g, function (letter) { return CYRILLIC_TWINS[letter]; }) : word;
+            }
+            if (!/[A-Za-z]/.test(word) || !/[А-Яа-яІіЇїЄєҐґ]/.test(word)) return word;
+            return word.replace(/[A-Za-z]/g, function (letter) { return LATIN_TWINS[letter] || letter; });
+        }).join(' ');
+    }
+
+    // Monospace text advances by the same step for every character, so the distance between the starts of neighbouring words is
+    // (letters in the first word + 1 space) × one pitch, whatever the words are. Proportional faces vary by far more than the pixel noise.
+    function isMonospaceLine(words) {
+        var ordered = (words || []).filter(function (word) { return word && String(word.text || '').trim().length; }).slice().sort(function (a, b) { return a.x - b.x; });
+        var pitches = [];
+        for (var index = 1; index < ordered.length; index += 1) {
+            var letters = String(ordered[index - 1].text).trim().length;
+            var gap = ordered[index].x - (ordered[index - 1].x + ordered[index - 1].width);
+            // Two or more spaces (indentation, aligned columns) break the count of cells; such pairs say nothing.
+            if (gap > ordered[index].height) continue;
+            pitches.push((ordered[index].x - ordered[index - 1].x) / (letters + 1));
+        }
+        if (pitches.length < 2) return false;
+        var mean = pitches.reduce(function (sum, value) { return sum + value; }, 0) / pitches.length;
+        var spread = Math.sqrt(pitches.reduce(function (sum, value) { return sum + Math.pow(value - mean, 2); }, 0) / pitches.length);
+        var height = ordered.reduce(function (sum, word) { return sum + word.height; }, 0) / ordered.length;
+        // A monospace pitch is about 0.6 of the font size, and the ink height of a word is 0.7-1.0 of it.
+        return spread / mean <= 0.035 && mean / height >= 0.45 && mean / height <= 0.95;
+    }
+
     // Serif or sans, read from the glyphs of one text line. Serif faces have thick vertical stems and thin horizontal strokes
     // (serifs, crossbars), sans faces draw both at about the same weight. The ratio of the median stem width to the median
     // thickness of the short vertical runs tells them apart. Returns null when the line is too small or too sparse to judge.
@@ -1325,6 +1385,10 @@
         sharpen: sharpen,
         prepareForOcr: prepareForOcr,
         classifyTypeface: classifyTypeface,
+        isMonospaceLine: isMonospaceLine,
+        scriptEvidence: scriptEvidence,
+        needsLatinReread: needsLatinReread,
+        unmixScripts: unmixScripts,
         detectLinearGradient: detectLinearGradient,
         mergeWordPasses: mergeWordPasses
     };

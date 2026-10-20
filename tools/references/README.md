@@ -71,6 +71,7 @@ grid cell) and `dom` (a node count that grows when a new element is found) are p
 | | `notion-login` | a single outlined email field, buttons |
 | | `gradients-css` | **synthetic** page of our own (source: `gradients-css.html`): CSS linear gradients on a hero, cards and a band; guards the gradient detector and both exporters |
 | | `backdrops-css` | **synthetic** page of our own (source: `backdrops-css.html`): a mesh-gradient hero and a radial-gradient band; guards the soft-backdrop detector (background cut out as a picture, text removed) |
+| | `fonts-css` | **synthetic** page of our own (source: `fonts-css.html`): serif, sans and monospace lines; guards the font-family detection (serif by stroke contrast, monospace by an equal character pitch) |
 | | `form-required` | **synthetic** page of our own (source: `form-required.html`): a contact form with two fields marked `*`; guards the required-field flag |
 | `heavy/` | `apple-ua` | photographic sections, long page |
 | | `stripe` | gradients, baked-in text, product mockups |

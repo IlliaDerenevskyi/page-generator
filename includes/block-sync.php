@@ -243,7 +243,9 @@ trait Page_Generator_Block_Sync {
         }
         $classes = ' ' . ($attrs['className'] ?? '') . ' ';
         if ($text) {
-            if (strpos($classes, ' pg-serif ') !== false) $set('fontFamily', 'serif'); elseif (($style['fontFamily'] ?? '') === 'serif') $set('fontFamily', null);
+            if (strpos($classes, ' pg-serif ') !== false) $set('fontFamily', 'serif');
+            elseif (strpos($classes, ' pg-mono ') !== false) $set('fontFamily', 'mono');
+            elseif (in_array($style['fontFamily'] ?? '', ['serif', 'mono'], true)) $set('fontFamily', null);
         }
         if ($changed) $node['style'] = $style;
         return $changed;

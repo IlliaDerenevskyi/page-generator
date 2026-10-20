@@ -1,32 +1,32 @@
 {
   "azure-node-service.png": {
-    "visual": 92.32,
-    "perceptual": 97.66,
-    "content": 87.05,
-    "worstZone": 64,
+    "visual": 92.34,
+    "perceptual": 97.67,
+    "content": 87.18,
+    "worstZone": 65,
     "text": 100,
     "dom": 97.18
   },
   "github-repo.png": {
-    "visual": 94.24,
-    "perceptual": 98.33,
-    "content": 58.49,
-    "worstZone": 0,
+    "visual": 94.27,
+    "perceptual": 98.34,
+    "content": 58.65,
+    "worstZone": 45,
     "text": 100,
     "dom": 73.78
   },
   "lab6.png": {
-    "visual": 93.5,
-    "perceptual": 97.43,
-    "content": 74.25,
+    "visual": 93.55,
+    "perceptual": 97.45,
+    "content": 74.7,
     "worstZone": 11,
     "text": 97.43,
     "dom": 83.8
   },
   "nodejs-org.png": {
-    "visual": 86.7,
-    "perceptual": 96.04,
-    "content": 62.88,
+    "visual": 86.81,
+    "perceptual": 96.1,
+    "content": 63.62,
     "worstZone": 26,
     "text": 99.12,
     "dom": 86.75
@@ -72,9 +72,9 @@
     "dom": 69.7
   },
   "backdrops-css.png": {
-    "visual": 95.57,
-    "perceptual": 97.99,
-    "content": 92.79,
+    "visual": 95.67,
+    "perceptual": 98.03,
+    "content": 93.18,
     "worstZone": 81,
     "text": 100,
     "dom": 70
@@ -86,5 +86,13 @@
     "worstZone": 48,
     "text": 86.67,
     "dom": 100
+  },
+  "fonts-css.png": {
+    "visual": 94.78,
+    "perceptual": 97.56,
+    "content": 41.64,
+    "worstZone": 15,
+    "text": 100,
+    "dom": 88.89
   }
 }

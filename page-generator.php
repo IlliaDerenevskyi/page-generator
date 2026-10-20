@@ -1265,6 +1265,9 @@ final class Page_Generator_Plugin {
         if (($style['fontFamily'] ?? '') === 'serif') {
             $out['typography_typography'] = 'custom';
             $out['typography_font_family'] = 'Georgia';
+        } elseif (($style['fontFamily'] ?? '') === 'mono') {
+            $out['typography_typography'] = 'custom';
+            $out['typography_font_family'] = 'Courier New';
         }
         return $out;
     }
@@ -1277,12 +1280,14 @@ final class Page_Generator_Plugin {
             '_padding' => $this->elementor_box_values(0),
             '_css_classes' => 'pg-el-text' . ($nowrap ? ' pg-nowrap' : '') . ($type === 'link' ? ' pg-link' : ''),
         ] + $this->elementor_typography($style, $settings);
+        $mono = ($style['fontFamily'] ?? '') === 'mono';
         if ($type === 'heading') {
-            $widget_settings = ['title' => wp_kses_post($label)] + $common;
+            $widget_settings = ['title' => $mono ? '<code>' . esc_html($label) . '</code>' : wp_kses_post($label)] + $common;
             if ($has_color) $widget_settings['title_color'] = $text_color;
             return ['id' => $id, 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => $widget_settings, 'elements' => []];
         }
-        $widget_settings = ['editor' => '<p>' . nl2br(esc_html($label)) . '</p>'] + $common;
+        $shown = nl2br(esc_html($label));
+        $widget_settings = ['editor' => '<p>' . ($mono ? '<code>' . $shown . '</code>' : $shown) . '</p>'] + $common;
         if ($has_color) $widget_settings['text_color'] = $text_color;
         if ($has_plate) $widget_settings['align'] = 'center';
         return ['id' => $id, 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => $widget_settings, 'elements' => []];
@@ -1688,7 +1693,9 @@ final class Page_Generator_Plugin {
     }
 
     private function font_family_css($style) {
-        return (($style['fontFamily'] ?? '') === 'serif') ? "font-family:Georgia,'Times New Roman',serif;" : '';
+        $family = $style['fontFamily'] ?? '';
+        if ($family === 'mono') return "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;";
+        return $family === 'serif' ? "font-family:Georgia,'Times New Roman',serif;" : '';
     }
 
     // A source-pixel length that scales with the canvas (--pg-k is one source pixel in screen pixels).

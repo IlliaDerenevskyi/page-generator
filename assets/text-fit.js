@@ -39,7 +39,54 @@
         }
     }
 
+    // Gutenberg button: the link is as wide as the block and centres a one-line label; a label wider than the plate is shrunk to fit it.
+    function fitButton(element) {
+        element.style.removeProperty('--pg-fit');
+        var link = element.querySelector('.wp-block-button__link');
+        if (!link) return;
+        var style = getComputedStyle(link);
+        var room = link.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        if (!room || room < 4) return;
+        var range = document.createRange();
+        for (var pass = 0; pass < 3; pass += 1) {
+            range.selectNodeContents(link);
+            var width = range.getBoundingClientRect().width;
+            if (width <= room * SLACK) break;
+            var current = parseFloat(element.style.getPropertyValue('--pg-fit')) || 1;
+            element.style.setProperty('--pg-fit', String(Math.max(FLOOR, current * room / width)));
+        }
+    }
+
+    // Elementor button: the widget has the plate width; the label inside is scaled the same way.
+    function fitElementorButton(widget) {
+        var button = widget.querySelector('.elementor-button');
+        var label = widget.querySelector('.elementor-button-text');
+        if (!button || !label) return;
+        if (button.hasAttribute('data-pg-fit')) { button.style.removeProperty('font-size'); button.removeAttribute('data-pg-fit'); }
+        var room = widget.clientWidth - 8;
+        if (room < 4) return;
+        // Elementor buttons animate their size (transition: all): measured mid-way the fit would chase a moving value.
+        button.style.setProperty('transition', 'none', 'important');
+        var base = parseFloat(getComputedStyle(button).fontSize);
+        var scale = 1;
+        var range = document.createRange();
+        for (var pass = 0; pass < 3; pass += 1) {
+            range.selectNodeContents(label);
+            var width = range.getBoundingClientRect().width;
+            if (width <= room * SLACK) break;
+            scale = Math.max(FLOOR, scale * room / width);
+            // The kit's button size can be !important, which a plain inline value would lose to.
+            button.style.setProperty('font-size', (base * scale) + 'px', 'important');
+            button.setAttribute('data-pg-fit', '1');
+            if (scale <= FLOOR) break;
+        }
+        button.getBoundingClientRect();
+        button.style.removeProperty('transition');
+    }
+
     function fitAll() {
+        Array.prototype.forEach.call(document.querySelectorAll('.page-generator-canvas .pg-abs.wp-block-buttons'), fitButton);
+        Array.prototype.forEach.call(document.querySelectorAll('.page-generator-canvas .elementor-widget-button'), fitElementorButton);
         Array.prototype.forEach.call(document.querySelectorAll('.page-generator-canvas .pg-abs.pg-text'), fitBlock);
         Array.prototype.forEach.call(document.querySelectorAll('.page-generator-canvas .pg-el-text.pg-nowrap, .pg-el-flow .pg-el-text.pg-nowrap'), fitWidget);
     }

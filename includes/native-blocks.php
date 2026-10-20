@@ -263,6 +263,7 @@ trait Page_Generator_Native_Blocks {
         $style = $this->native_style($node, true, $background);
         // The face is a class (not inline CSS) so the block still validates against its saved markup.
         if (($node['style']['fontFamily'] ?? '') === 'serif') $custom_class = trim($custom_class . ' pg-serif');
+        elseif (($node['style']['fontFamily'] ?? '') === 'mono') $custom_class = trim($custom_class . ' pg-mono');
         $attrs = $this->native_id($node);
         if ($box = $this->native_box($node, $origin)) $attrs['pgBox'] = $box;
         if ($custom_class) $attrs['className'] = $custom_class;
@@ -270,6 +271,8 @@ trait Page_Generator_Native_Blocks {
         $base = $tag === 'p' ? '' : 'wp-block-heading';
         $class = $this->native_class_attr($base, $custom_class, $style['classes']);
         $content = esc_html($label);
+        // wptexturize turns "--" into a dash and straight quotes into curly ones, which breaks code; it leaves <code> alone.
+        if (($node['style']['fontFamily'] ?? '') === 'mono') $content = '<code>' . $content . '</code>';
         if ($link) {
             $content = '<a href="' . esc_url($node['behavior']['url'] ?? '#') . '">' . $content . '</a>';
         }

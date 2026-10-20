@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, isMonospaceLine } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -489,4 +489,24 @@ test('splitRequiredMark turns a trailing asterisk into a flag', () => {
     assert.deepEqual(splitRequiredMark('', 'Телефон *'), { label: '', placeholder: 'Телефон', required: true });
     assert.deepEqual(splitRequiredMark('Коментар', ''), { label: 'Коментар', placeholder: '', required: false });
     assert.deepEqual(splitRequiredMark(undefined, undefined), { label: '', placeholder: '', required: false });
+});
+
+test('Latin lines that carry Cyrillic twins are found and repaired; Ukrainian lines are left alone', () => {
+    assert.strictEqual(needsLatinReread('A hero whose background із a soft mesh of overlapping colour glows.'), true);
+    assert.strictEqual(needsLatinReread('Ту it free'), true);
+    assert.strictEqual(needsLatinReread('Завантажити Chrome для Windows'), false);
+    assert.strictEqual(needsLatinReread('A hero whose background is a soft mesh'), false);
+    assert.strictEqual(unmixScripts('A hero whose background із a soft mesh of glow'), 'A hero whose background is a soft mesh of glow');
+    assert.strictEqual(unmixScripts('Hовини дня та Новини країни'), 'Новини дня та Новини країни');
+    assert.strictEqual(unmixScripts('Новини країни та Cвіт'), 'Новини країни та Світ');
+    assert.strictEqual(unmixScripts('Завантажити Chrome для Windows'), 'Завантажити Chrome для Windows');
+});
+
+test('isMonospaceLine needs an equal character pitch across words', () => {
+    const place = (texts, widthOf, gap) => { let x = 10; return texts.map((text) => { const word = { text, x, width: widthOf(text), height: 14 }; x += word.width + gap; return word; }); };
+    const mono = place(['git', 'commit', '--amend', '--no-edit'], (text) => text.length * 8.4 - 1, 8.4 + 1);
+    assert.strictEqual(isMonospaceLine(mono), true);
+    const proportional = place(['Plain', 'sans', 'text', 'that', 'should', 'stay'], (text) => [...text].reduce((sum, c) => sum + ('il.t'.includes(c) ? 4 : 'mw'.includes(c) ? 12 : 8), 0), 4);
+    assert.strictEqual(isMonospaceLine(proportional), false);
+    assert.strictEqual(isMonospaceLine(mono.slice(0, 2)), false);
 });

@@ -52,6 +52,9 @@
     justify-content: center;
     padding: 0 .5em;
     white-space: nowrap;
+    /* The size comes from the block (--pg-fs, shrunk by --pg-fit); the theme's own button size would ignore the screenshot. */
+    font-size: inherit;
+    line-height: 1.2;
 }
 .page-generator-canvas .pg-abs.wp-block-image {
     margin: 0;
@@ -77,8 +80,31 @@
     white-space: nowrap;
 }
 
+.page-generator-canvas .pg-mono,
+.page-generator-canvas .pg-mono a,
+.pg-flow-page .pg-mono,
+.pg-flow-page .pg-mono a {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+}
+/* An Elementor button label stays on one line like on the screenshot; assets/text-fit.js shrinks one that is wider than the button. */
+.page-generator-canvas .elementor-widget-button .elementor-button,
+.page-generator-canvas .elementor-widget-button .elementor-button-text {
+    white-space: nowrap;
+}
+/* <code> keeps wptexturize away from code lines; the theme's own code styling must not show. */
+.page-generator-canvas .pg-mono code,
+.pg-flow-page .pg-mono code,
+.page-generator-canvas .pg-el-text code {
+    font: inherit;
+    background: none;
+    padding: 0;
+    border: 0;
+    color: inherit;
+}
 .page-generator-canvas .pg-serif,
-.page-generator-canvas .pg-serif a {
+.page-generator-canvas .pg-serif a,
+.pg-flow-page .pg-serif,
+.pg-flow-page .pg-serif a {
     font-family: Georgia, 'Times New Roman', serif;
 }
 

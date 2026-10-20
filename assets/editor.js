@@ -773,6 +773,11 @@
                             return results;
                         });
                     }).then(function (results) {
+                        return rereadLatinLines(canvas, results[0]).then(function (words) {
+                            results[0] = words;
+                            return results;
+                        });
+                    }).then(function (results) {
                         var found = window.PageGeneratorDetectors.findIcons(pixelData, canvas.width, canvas.height, results[0]);
                         results[0] = results[0].filter(function (word) { return found.droppedWords.indexOf(word) === -1; });
                         var iconCandidates = found.icons.filter(function (icon) {
@@ -903,6 +908,77 @@
                 });
             });
             return chain.then(function () { return worker.terminate(); }).then(function () { return found; });
+        });
+    }
+
+    // A line the Ukrainian+English model has spelled with Cyrillic twins in the middle of English ("background із a soft mesh") is cut out,
+    // recoloured by its distance from the backdrop and read again with the English model alone, which has no Cyrillic letters to confuse.
+    function rereadLatinLines(canvas, words) {
+        var tools = window.PageGeneratorDetectors;
+        var lines = tools.groupWordsIntoLines(words).filter(function (line) {
+            return tools.needsLatinReread(line.words.map(function (word) { return word.text; }).join(' '));
+        }).slice(0, 30);
+        if (!lines.length) return Promise.resolve(words);
+        return Tesseract.createWorker('eng').then(function (worker) {
+            var replaced = [];
+            var chain = worker.setParameters({ tessedit_pageseg_mode: '7' });
+            lines.forEach(function (line) {
+                chain = chain.then(function () {
+                    var pad = 4;
+                    var box = { x: Math.max(0, line.x - pad), y: Math.max(0, line.y - pad) };
+                    box.width = Math.min(canvas.width - box.x, line.width + pad * 2);
+                    box.height = Math.min(canvas.height - box.y, line.height + pad * 2);
+                    var scale = Math.min(4, Math.max(1, Math.ceil(48 / line.height)));
+                    var background = ringBackground(canvas, line);
+                    var source = canvas.getContext('2d', { willReadFrequently: true }).getImageData(box.x, box.y, box.width, box.height);
+                    var big = tools.resampleLanczos(source.data, box.width, box.height, box.width * scale, box.height * scale);
+                    for (var index = 0; index < big.length; index += 4) {
+                        var distance = Math.abs(big[index] - background[0]) + Math.abs(big[index + 1] - background[1]) + Math.abs(big[index + 2] - background[2]);
+                        var value = 255 - Math.min(255, distance * 1.2);
+                        big[index] = value; big[index + 1] = value; big[index + 2] = value; big[index + 3] = 255;
+                    }
+                    var crop = document.createElement('canvas');
+                    crop.width = box.width * scale;
+                    crop.height = box.height * scale;
+                    crop.getContext('2d').putImageData(new ImageData(big, crop.width, crop.height), 0, 0);
+                    return worker.recognize(crop).then(function (result) {
+                        var read = (result.data.words || []).filter(function (word) { return word.text && word.text.trim() && word.confidence >= 40; });
+                        // A chevron or bullet at the edge of the line is read as a lone letter ("v", "x"): not part of the phrase.
+                        var junkEdge = function (word) { var t = word.text.trim(); return t.length === 1 && !/^[aAI0-9]$/.test(t); };
+                        while (read.length > 1 && junkEdge(read[read.length - 1])) read.pop();
+                        while (read.length > 1 && junkEdge(read[0])) read.shift();
+                        var before = line.words.reduce(function (sum, word) { return sum + Number(word.confidence || 0); }, 0) / line.words.length;
+                        var after = read.length ? read.reduce(function (sum, word) { return sum + word.confidence; }, 0) / read.length : 0;
+                        // The new reading must cover the line about as well as the old one and be no less sure of itself.
+                        var covered = read.length ? Math.max.apply(null, read.map(function (word) { return word.bbox.x1; })) / scale - Math.min.apply(null, read.map(function (word) { return word.bbox.x0; })) / scale : 0;
+                        // The old reading's solid words (Latin, three letters or more) must be found in the new one: a menu or a code line the
+                        // English model garbles would otherwise lose words.
+                        var found = read.map(function (word) { return word.text.trim().toLowerCase(); });
+                        var solid = line.words.map(function (word) { return word.text.trim().toLowerCase(); }).filter(function (text) { return /^[a-z][a-z'-]{2,}[.,:;!?]?$/.test(text); });
+                        var agreed = solid.filter(function (text) { return found.indexOf(text) !== -1; }).length;
+                        if (solid.length && agreed < solid.length * .75) return;
+                        if (!read.length || covered < line.width * .85 || covered > line.width * 1.15 || after < Math.min(60, before - 8)) return;
+                        // The line stays one phrase (as it was for the first reading): split into short words it would be mistaken for icon debris.
+                        var left = Math.min.apply(null, read.map(function (word) { return word.bbox.x0; }));
+                        var right = Math.max.apply(null, read.map(function (word) { return word.bbox.x1; }));
+                        replaced.push({
+                            old: line.words,
+                            words: [{
+                                text: read.map(function (word) { return word.text.trim(); }).join(' '),
+                                x: Math.round(box.x + left / scale), y: line.y, width: Math.round((right - left) / scale), height: line.height,
+                                confidence: after
+                            }]
+                        });
+                    });
+                });
+            });
+            return chain.then(function () { return worker.terminate(); }).then(function () {
+                var drop = [];
+                replaced.forEach(function (item) { drop = drop.concat(item.old); });
+                var out = words.filter(function (word) { return drop.indexOf(word) === -1; });
+                replaced.forEach(function (item) { out = out.concat(item.words); });
+                return out;
+            });
         });
     }
 
@@ -1506,7 +1582,7 @@
             var lineHeights = groups.map(function (line) { return line.height; }).sort(function (a, b) { return a - b; });
             analysis.medianLine = lineHeights.length ? lineHeights[Math.floor(lineHeights.length / 2)] : 16;
             var textElements = groups.map(function (line) {
-                var text = normalizeOcrText(line.words.map(function (word) { return word.text; }).join(' '));
+                var text = normalizeOcrText(window.PageGeneratorDetectors.unmixScripts(line.words.map(function (word) { return word.text; }).join(' ')));
                 if (!isUsableOcrText(text, line.words)) return null;
                 var node = {
                     id: randomId(),
@@ -1528,7 +1604,8 @@
                     source: { detectedBy: ['ocr'], manual: false }
                 };
                 var typeface = detectLineTypeface(analysis.canvas, line, node.style.fontWeight);
-                if (typeface && typeface.serif) node.style.fontFamily = 'serif';
+                if (window.PageGeneratorDetectors.isMonospaceLine(line.words)) node.style.fontFamily = 'mono';
+                else if (typeface && typeface.serif) node.style.fontFamily = 'serif';
                 node = classifyTextNode(node, analysis);
                 return node;
             }).filter(function (node) { return node !== null; });
