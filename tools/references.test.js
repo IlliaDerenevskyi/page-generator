@@ -5,11 +5,13 @@ const path = require('path');
 const { PNG } = require('pngjs');
 
 const root = path.join(__dirname, 'references');
-const listFiles = (folders) => folders.flatMap((folder) => fs.readdirSync(path.join(root, folder)).filter((name) => /\.png$/i.test(name)).map((name) => ({ folder, name })));
+// The screenshots are not in git (tools/references/{desktop,heavy,holdout,mobile}/ are ignored); a clone without them skips these checks.
+const listFiles = (folders) => folders.flatMap((folder) => (fs.existsSync(path.join(root, folder)) ? fs.readdirSync(path.join(root, folder)) : []).filter((name) => /\.png$/i.test(name)).map((name) => ({ folder, name })));
 const referenceFiles = listFiles(['desktop', 'heavy']);
 const holdoutFiles = listFiles(['holdout']);
+const missing = (files) => files.length === 0 && 'the screenshots are not in git: copy them into tools/references/ (see references/README.md)';
 
-test('every reference screenshot is a valid PNG within the plugin limits', () => {
+test('every reference screenshot is a valid PNG within the plugin limits', { skip: missing(referenceFiles) }, () => {
     assert.ok(referenceFiles.length >= 8);
     for (const { folder, name } of referenceFiles) {
         const png = PNG.sync.read(fs.readFileSync(path.join(root, folder, name)));
@@ -18,7 +20,7 @@ test('every reference screenshot is a valid PNG within the plugin limits', () =>
     }
 });
 
-test('every reference has a baseline entry with the gated metrics, and the baseline has no stale entries', () => {
+test('every reference has a baseline entry with the gated metrics, and the baseline has no stale entries', { skip: missing(referenceFiles) }, () => {
     const baselinePath = path.join(root, 'baseline.json');
     assert.ok(fs.existsSync(baselinePath), 'references/baseline.json is missing: run `npm run bench:update`');
     const baseline = JSON.parse(fs.readFileSync(baselinePath, 'utf8'));
@@ -32,12 +34,12 @@ test('every reference has a baseline entry with the gated metrics, and the basel
     for (const name of Object.keys(baseline)) assert.ok(known.has(name), `baseline entry ${name} has no file`);
 });
 
-test('the README lists every reference', () => {
+test('the README lists every reference', { skip: missing(referenceFiles) }, () => {
     const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
     for (const { name } of referenceFiles) assert.ok(readme.includes(name.replace(/\.png$/i, '')), `${name} is not described in references/README.md`);
 });
 
-test('the hold-out set is a separate, measured set that the tuning baseline does not mention', () => {
+test('the hold-out set is a separate, measured set that the tuning baseline does not mention', { skip: missing(holdoutFiles) }, () => {
     assert.ok(holdoutFiles.length >= 8);
     const holdout = JSON.parse(fs.readFileSync(path.join(root, 'baseline-holdout.json'), 'utf8'));
     const tuning = JSON.parse(fs.readFileSync(path.join(root, 'baseline.json'), 'utf8'));

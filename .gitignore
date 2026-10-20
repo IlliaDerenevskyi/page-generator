@@ -10,3 +10,9 @@ tools/.cookies.json
 tools/.mcp-*.js
 tools/results/
 .playwright-mcp/
+
+# reference screenshots (large, may show personal data): kept locally, see tools/references/README.md
+tools/references/desktop/
+tools/references/heavy/
+tools/references/holdout/
+tools/references/mobile/

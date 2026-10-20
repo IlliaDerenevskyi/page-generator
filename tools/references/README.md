@@ -38,6 +38,15 @@ the run **overwrites its content**, so use a scratch page), Chromium (`PG_CHROMI
 Script and stylesheet URLs carry the file's modification time (`asset_version()`), so an edited `editor.js` or `detectors.js` is
 fetched fresh; before that, a browser that kept its cache between runs (the MCP one does) measured the previous code.
 
+## The screenshots are not in git
+
+The PNG folders (`desktop/`, `heavy/`, `holdout/`, `mobile/`) are in `.gitignore`: they are large, and some captures can show
+personal data (a logged-in account in a menu). Keep them on your machine; a fresh clone has none, and `references.test.js` then
+skips its checks. Only what is small and safe is tracked: this README, the two baselines and the HTML sources of the synthetic
+pages (`gradients-css.html`, `backdrops-css.html`, `gradients-multi.html`, `fonts-css.html`, `form-required.html`). A synthetic PNG
+is rebuilt from its source with `chromium --headless --hide-scrollbars --window-size=1370,<height> --screenshot=desktop/<name>.png file://$PWD/<name>.html`.
+Hold-out pages must be captured again (1370 px viewport, 1x, cut to 4000 px, logged out).
+
 ## Two sets: tuning and hold-out
 
 The detectors contain many empirical thresholds (what counts as a card, a pill-shaped button, a photo, an icon). They were found
@@ -86,6 +95,7 @@ grid cell) and `dom` (a node count that grows when a new element is found) are p
 | | `vuejs` | light landing, large headings |
 | | `django` | landing with a green header and side columns |
 | | `python-docs` | documentation with tinted callouts |
+| | `rozetka` | online-store catalogue: banner carousel, product-card grid with price and badges, left menu, lazy-loading image placeholders (captured 2026-10-21 at 2x, reduced to 1x and cut to 4000 px) |
 | `mobile/` | `lab6-mobile-390` | the same page at 390 px, for the mobile layout (not run by `benchmark.js`) |
 
 Heavy files are cut to 5000 px and hold-out pages to 4000 px, so a run stays within the plugin's limits (height 10000 px, 40 megapixels).

@@ -62,5 +62,13 @@
     "worstZone": 0,
     "text": 96.46,
     "dom": 76.88
+  },
+  "rozetka.png": {
+    "visual": 87.45,
+    "perceptual": 96.53,
+    "content": 68.63,
+    "worstZone": 42,
+    "text": 99.6,
+    "dom": 95.28
   }
 }
