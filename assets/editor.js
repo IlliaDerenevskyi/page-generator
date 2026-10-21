@@ -216,7 +216,12 @@
                     '<div class="page-generator-tabs">' +
                         '<button type="button" class="page-generator-tab is-active" data-view="figma">Figma</button>' +
                         '<button type="button" class="page-generator-tab" data-view="screenshots">Скріншоти</button>' +
+                        '<button type="button" class="page-generator-tab" data-view="video">Відео</button>' +
                         '<button type="button" class="page-generator-tab" data-view="settings">Налаштування</button>' +
+                    '</div>' +
+                    '<div id="pg-description-block" class="page-generator-description">' +
+                        '<label class="page-generator-field">Опис поведінки та структури (необов’язково)<textarea id="pg-source-description" rows="4" placeholder="Наприклад: у верхньому меню є 4 пункти, кожен веде до відповідного розділу сторінки. Кнопка Категорії відкриває випадаюче меню: техніка, товари для дому, іграшки."></textarea></label>' +
+                        '<p class="page-generator-note">Опис не надсилається у зовнішні AI-сервіси: плагін розбирає його локально й зберігає у схемі. Він спільний для вкладок Figma, Скріншоти й Відео.</p>' +
                     '</div>' +
                     '<div class="page-generator-view is-active" data-view="figma">' +
                         '<label class="page-generator-field">Посилання на Figma<input id="pg-figma-url" type="url" placeholder="https://www.figma.com/design/..."></label>' +
@@ -227,9 +232,10 @@
                     '<div class="page-generator-view" data-view="screenshots">' +
                         '<div id="pg-dropzone" class="page-generator-dropzone" role="button" tabindex="0"><strong>Перетягніть сюди один або кілька скріншотів</strong><span>або натисніть, щоб вибрати файли</span><input id="pg-images" type="file" accept="image/*" multiple hidden></div>' +
                         '<div id="pg-file-roles" class="page-generator-file-roles"></div>' +
-                        '<label class="page-generator-field">Опис поведінки та структури (необов’язково)<textarea id="pg-source-description" rows="6" placeholder="Наприклад: у верхньому меню є кнопка Категорії з випадаючим меню: техніка, товари для дому, будівельні матеріали та іграшки. Кнопка Про нас відкриває меню з FAQ та контактами."></textarea></label>' +
-                        '<p class="page-generator-note">Опис не надсилається у зовнішні AI-сервіси. Плагін використовує локальний словник UI-компонентів і зберігає оригінальний текст у схемі.</p>' +
                         '<button type="button" id="pg-build-screenshot" class="page-generator-button page-generator-button-primary" disabled>Побудувати схему зі скріншотів</button>' +
+                    '</div>' +
+                    '<div class="page-generator-view" data-view="video">' +
+                        '<div class="page-generator-dropzone is-disabled"><strong>Відео з інтерфейсом сторінки</strong><span>Розпізнавання поведінки зі запису екрана ще в розробці. Поки що опишіть поведінку текстом вище й використайте вкладку «Скріншоти» або «Figma».</span></div>' +
                     '</div>' +
                     '<div class="page-generator-view" data-view="settings">' +
                         '<p class="page-generator-note">Швидкі налаштування зберігаються на сервері й застосовуються до наступних імпортів.</p>' +
@@ -270,6 +276,8 @@
             $(this).addClass('is-active');
             $('.page-generator-view').removeClass('is-active');
             $('.page-generator-view[data-view="' + $(this).data('view') + '"]').addClass('is-active');
+            // Settings are not about a page, so the description belongs to every other tab.
+            $('#pg-description-block').toggle($(this).data('view') !== 'settings');
         });
         $('#pg-scan-figma').on('click', scanFigma);
         $('#pg-import-figma').on('click', importFigma);
@@ -360,6 +368,9 @@
             nodeIds: ids.join(',')
         }).done(function (response) {
             if (!response.success) { $('#pg-status').text(response.data || 'Помилка імпорту.'); return; }
+            var description = $('#pg-source-description').val() || '';
+            response.data.page.description = description;
+            response.data.page.hints = parseDescription(description);
             $('#page-generator-modal').data('schema', response.data.page);
             $('#pg-output-actions').show();
             $('#pg-status').text('Схему імпортовано. Оберіть спосіб виводу.');

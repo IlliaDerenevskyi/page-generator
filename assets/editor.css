@@ -21,6 +21,9 @@
 .page-generator-dropzone { display: flex; flex-direction: column; gap: 8px; padding: 32px; border: 2px dashed #64748b; border-radius: 8px; text-align: center; color: #cbd5e1; background: #0f172a; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
 .page-generator-dropzone span { color: #94a3b8; font-size: 12px; }
 .page-generator-dropzone:hover, .page-generator-dropzone.is-dragover { border-color: #818cf8; background: #1e1b4b; color: #fff; }
+.page-generator-description { margin-bottom: 14px; padding-bottom: 6px; border-bottom: 1px solid #334155; }
+.page-generator-dropzone.is-disabled { cursor: default; opacity: .75; }
+.page-generator-dropzone.is-disabled:hover { border-color: #64748b; background: #0f172a; color: #cbd5e1; }
 .page-generator-status { min-height: 22px; margin-top: 12px; color: #a5b4fc; }
 .page-generator-warning { color: #fbbf24; }
 .page-generator-note { color: #94a3b8; font-size: 12px; }
