@@ -2,8 +2,8 @@
   "azure-node-service.png": {
     "visual": 92.56,
     "perceptual": 97.77,
-    "content": 89.05,
-    "worstZone": 67,
+    "content": 89,
+    "worstZone": 66,
     "text": 100,
     "dom": 95.06
   },
@@ -24,17 +24,17 @@
     "dom": 83.92
   },
   "nodejs-org.png": {
-    "visual": 86.72,
-    "perceptual": 96.14,
-    "content": 66.75,
+    "visual": 86.7,
+    "perceptual": 96.15,
+    "content": 66.62,
     "worstZone": 31,
     "text": 99.12,
     "dom": 86.75
   },
   "notion-login.png": {
-    "visual": 96.66,
-    "perceptual": 98.85,
-    "content": 48.74,
+    "visual": 96.65,
+    "perceptual": 98.86,
+    "content": 49.23,
     "worstZone": 31,
     "text": 98.28,
     "dom": 86.84
@@ -82,7 +82,7 @@
   "form-required.png": {
     "visual": 98.41,
     "perceptual": 99.46,
-    "content": 86.05,
+    "content": 86.27,
     "worstZone": 70,
     "text": 86.67,
     "dom": 100
@@ -110,5 +110,13 @@
     "worstZone": 0,
     "text": 100,
     "dom": 92.16
+  },
+  "anchors-menu.png": {
+    "visual": 96.67,
+    "perceptual": 98.56,
+    "content": 94.7,
+    "worstZone": 84,
+    "text": 100,
+    "dom": 81.25
   }
 }

@@ -269,6 +269,12 @@ trait Page_Generator_Elementor_Sync {
             if ($url && ($node['url'] ?? ($node['asset']['url'] ?? '')) !== $url) { $node['url'] = esc_url_raw($url); $changed = true; }
             if (!empty($settings['image']['id']) && absint($settings['image']['id']) !== absint($node['attachmentId'] ?? 0)) { $node['attachmentId'] = absint($settings['image']['id']); $changed = true; }
         } elseif ($container) {
+            // The CSS ID of a container is the anchor of its node.
+            $anchor = is_string($settings['_element_id'] ?? null) && preg_match('/^[A-Za-z0-9_-]{1,60}$/', $settings['_element_id']) ? $settings['_element_id'] : '';
+            if ($anchor !== (string) ($node['anchor'] ?? '')) {
+                if ($anchor === '') unset($node['anchor']); else $node['anchor'] = $anchor;
+                $changed = true;
+            }
             if (($settings['background_background'] ?? '') === 'classic') {
                 $fill = $this->native_color($settings['background_color'] ?? '');
                 if ($fill !== '' && empty($style['gradient'])) $set('background', $fill);

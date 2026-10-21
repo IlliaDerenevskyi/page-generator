@@ -1113,6 +1113,42 @@
         }).join(' ');
     }
 
+    var NUMBER_WORDS = { 'один': 1, 'одна': 1, 'два': 2, 'дві': 2, 'три': 3, 'чотири': 4, 'п’ять': 5, "п'ять": 5, 'шість': 6, 'сім': 7, 'вісім': 8, 'дев’ять': 9, "дев'ять": 9, 'десять': 10,
+        one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+
+    // What a description asks the page to do, as intents the builder can act on. Only what is recognised is returned; a sentence with no intent is not
+    // an error here (the caller decides what to say about it). "anchors": the items of a menu lead to the sections of the page ("the top menu has 4
+    // items, each leads to its section"): region 'top' (default) or 'bottom', and the number of items when the text gives one.
+    function parseBehaviorIntents(description) {
+        var intents = [];
+        String(description || '').split(/[.!?\n]+/).forEach(function (sentence) {
+            var text = sentence.toLowerCase().trim();
+            if (!text) return;
+            var isMenu = /меню|навігац|menu|navigation|\bnav\b|пункт/.test(text);
+            var leads = /вед(е|уть)|перех|прокру|скрол|якор|веде до|scroll|jump|leads?|links? to|anchor/.test(text);
+            var section = /розділ|секці|блок|частин|section|block/.test(text);
+            if (!(isMenu && leads && section)) return;
+            var count = null;
+            var digits = /(\d+)\s*(пункт|елемент|посилан|item|link)/.exec(text);
+            if (digits) count = parseInt(digits[1], 10);
+            else {
+                var word = /([a-zа-яіїєґ’']+)\s+(пункт|елемент|посилан|item|link)/.exec(text);
+                if (word && NUMBER_WORDS[word[1]]) count = NUMBER_WORDS[word[1]];
+            }
+            intents.push({ action: 'anchors', region: /нижн|футер|підвал|footer|bottom/.test(text) ? 'bottom' : 'top', count: count, source: sentence.trim() });
+        });
+        return intents;
+    }
+
+    var TRANSLIT = { а: 'a', б: 'b', в: 'v', г: 'h', ґ: 'g', д: 'd', е: 'e', є: 'ie', ж: 'zh', з: 'z', и: 'y', і: 'i', ї: 'i', й: 'i', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u',
+        ф: 'f', х: 'kh', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'shch', ь: '', ю: 'iu', я: 'ia', ы: 'y', э: 'e', ъ: '' };
+
+    // A URL-safe anchor from a title: Ukrainian and Russian letters transliterated, everything else not a letter or digit becomes a dash.
+    function slugify(text) {
+        var out = String(text || '').toLowerCase().split('').map(function (letter) { return TRANSLIT.hasOwnProperty(letter) ? TRANSLIT[letter] : letter; }).join('');
+        return out.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '');
+    }
+
     // Monospace text advances by the same step for every character, so the distance between the starts of neighbouring words is
     // (letters in the first word + 1 space) × one pitch, whatever the words are. Proportional faces vary by far more than the pixel noise.
     function isMonospaceLine(words) {
@@ -1742,6 +1778,8 @@
         needsLatinReread: needsLatinReread,
         unmixScripts: unmixScripts,
         fixAiWord: fixAiWord,
+        parseBehaviorIntents: parseBehaviorIntents,
+        slugify: slugify,
         detectLinearGradient: detectLinearGradient,
         gradientGrid: gradientGrid,
         mergeWordPasses: mergeWordPasses

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, detectLogoTiles, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, fixAiWord, isMonospaceLine, inkFontSize, baselineLineHeight, scoreFontWidths, chooseFont } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, detectLogoTiles, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, fixAiWord, parseBehaviorIntents, slugify, isMonospaceLine, inkFontSize, baselineLineHeight, scoreFontWidths, chooseFont } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -621,4 +621,19 @@ test('detectLogoTiles leaves plates with lines of text, and fewer than four plat
     surfaces.forEach((plate) => { lines.push({ text: 'Title', x: plate.x + 10, y: plate.y + 10, width: 80, height: 14 }); lines.push({ text: 'Body', x: plate.x + 10, y: plate.y + 50, width: 80, height: 14 }); });
     assert.equal(detectLogoTiles(surfaces, lines, [], [], data, width, height).length, 0);
     assert.equal(detectLogoTiles(surfaces.slice(0, 3), [], [], [], data, width, height).length, 0);
+});
+
+test('parseBehaviorIntents reads "the menu has N items, each leads to its section" and nothing else', () => {
+    assert.deepEqual(parseBehaviorIntents('У верхньому меню є 4 пункти, кожен з них веде на відповідний розділ сторінки.').map((i) => [i.action, i.region, i.count]), [['anchors', 'top', 4]]);
+    assert.deepEqual(parseBehaviorIntents('У нижньому меню три пункти, кожен веде до секції').map((i) => [i.region, i.count]), [['bottom', 3]]);
+    assert.deepEqual(parseBehaviorIntents('The top menu has five items; each one scrolls to its section.').map((i) => [i.region, i.count]), [['top', 5]]);
+    assert.equal(parseBehaviorIntents('Кнопка Категорії відкриває випадаюче меню.').length, 0);
+    assert.equal(parseBehaviorIntents('').length, 0);
+});
+
+test('slugify makes a URL-safe anchor from a Ukrainian title', () => {
+    assert.equal(slugify('Про нас'), 'pro-nas');
+    assert.equal(slugify('Відгуки клієнтів!'), 'vidhuky-kliientiv');
+    assert.equal(slugify('Щоденні знижки'), 'shchodenni-znyzhky');
+    assert.equal(slugify('***'), '');
 });

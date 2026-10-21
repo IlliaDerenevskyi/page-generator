@@ -344,13 +344,21 @@ trait Page_Generator_Native_Blocks {
         return $this->native_block('core/table', $attrs, '<figure class="wp-block-table"><table class="has-fixed-layout">', $head . '<tbody>' . $body . '</tbody>', '</table></figure>');
     }
 
+    // The anchor of a node (set by the description: a menu item that leads to this section): letters, digits, dash and underscore only.
+    private function node_anchor($node) {
+        $anchor = is_array($node) && isset($node['anchor']) && is_string($node['anchor']) ? $node['anchor'] : '';
+        return preg_match('/^[A-Za-z0-9_-]{1,60}$/', $anchor) ? $anchor : '';
+    }
+
     private function native_group_block($node, $origin, $children, $leaf = false, $custom = []) {
         $style = $this->native_style($node, false, true);
         $attrs = $custom + $this->native_id($node);
         if ($box = $this->native_box($node, $origin)) $attrs['pgBox'] = $box;
         $attrs = array_merge($attrs, $style['attrs']);
+        $anchor = $this->node_anchor($node);
+        if ($anchor !== '') $attrs['anchor'] = $anchor;
         $class = $this->native_class_attr('wp-block-group', '', $style['classes']);
-        $open = '<div class="' . esc_attr($class) . '"' . ($style['css'] !== '' ? ' style="' . esc_attr($style['css']) . '"' : '') . '>';
+        $open = '<div class="' . esc_attr($class) . '"' . ($anchor !== '' ? ' id="' . esc_attr($anchor) . '"' : '') . ($style['css'] !== '' ? ' style="' . esc_attr($style['css']) . '"' : '') . '>';
         return $this->native_block('core/group', $attrs, $open, implode("\n\n", array_filter($children)), '</div>');
     }
 

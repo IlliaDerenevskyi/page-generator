@@ -43,7 +43,7 @@ fetched fresh; before that, a browser that kept its cache between runs (the MCP 
 The PNG folders (`desktop/`, `heavy/`, `holdout/`, `mobile/`) are in `.gitignore`: they are large, and some captures can show
 personal data (a logged-in account in a menu). Keep them on your machine; a fresh clone has none, and `references.test.js` then
 skips its checks. Only what is small and safe is tracked: this README, the two baselines and the HTML sources of the synthetic
-pages (`gradients-css.html`, `backdrops-css.html`, `gradients-multi.html`, `fonts-css.html`, `form-required.html`). A synthetic PNG
+pages (`gradients-css.html`, `backdrops-css.html`, `gradients-multi.html`, `fonts-css.html`, `form-required.html`, `anchors-menu.html`). A synthetic PNG
 is rebuilt from its source with `chromium --headless --hide-scrollbars --window-size=1370,<height> --screenshot=desktop/<name>.png file://$PWD/<name>.html`.
 Hold-out pages must be captured again (1370 px viewport, 1x, cut to 4000 px, logged out).
 
@@ -84,6 +84,7 @@ grid cell) and `dom` (a node count that grows when a new element is found) are p
 | | `gradients-multi` | **synthetic** page of our own (source: `gradients-multi.html`): a four-colour and a five-colour ramp; guards multi-stop gradient detection (Gutenberg/HTML keep every stop, Elementor keeps its ends and the middle stop that bends most) |
 | | `fonts-css` | **synthetic** page of our own (source: `fonts-css.html`): serif, sans and monospace lines; guards the font-family detection (serif by stroke contrast, monospace by an equal character pitch) |
 | | `form-required` | **synthetic** page of our own (source: `form-required.html`): a contact form with two fields marked `*`; guards the required-field flag |
+| | `anchors-menu` | **synthetic** page of our own (source: `anchors-menu.html`): a top menu of four items and four sections titled like them; with the description "у верхньому меню є 4 пункти, кожен веде на відповідний розділ" the items must lead to the sections (anchors) |
 | `heavy/` | `apple-ua` | photographic sections, long page |
 | | `stripe` | gradients, baked-in text, product mockups |
 | | `wikipedia-article` | very small text, serif headings, infobox |

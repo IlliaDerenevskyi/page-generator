@@ -400,3 +400,7 @@
         min-width: 560px;
     }
 }
+
+/* Menu items that lead to a section of the page (anchors from the description) scroll to it instead of jumping. */
+html:has(.page-generator-canvas), html:has(.pg-flow-page) { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) { html:has(.page-generator-canvas), html:has(.pg-flow-page) { scroll-behavior: auto; } }

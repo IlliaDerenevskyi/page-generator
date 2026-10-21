@@ -457,6 +457,12 @@ trait Page_Generator_Block_Sync {
                 if ($rows !== null) { $node['rows'] = $rows; $changed = true; }
                 return $changed;
             case 'core/group':
+                // The anchor in the block's own settings is the node's anchor (edited in the editor's "Advanced" panel).
+                $anchor = is_string($attrs['anchor'] ?? null) && preg_match('/^[A-Za-z0-9_-]{1,60}$/', $attrs['anchor']) ? $attrs['anchor'] : '';
+                if ($anchor !== (string) ($node['anchor'] ?? '')) {
+                    if ($anchor === '') unset($node['anchor']); else $node['anchor'] = $anchor;
+                    $changed = true;
+                }
                 return $this->sync_style($node, $attrs, false) || $changed;
         }
         return $changed;

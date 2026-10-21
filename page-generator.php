@@ -1238,6 +1238,7 @@ final class Page_Generator_Plugin {
         }
         $elementor_settings = $this->elementor_plate_settings($style, $node, (($settings['direction'] ?? '') === 'row' ? 'row' : 'column'))
             + ['flex_gap' => $this->elementor_gap(absint($settings['gap'] ?? 0))];
+        if ($this->node_anchor($node) !== '') $elementor_settings['_element_id'] = $this->node_anchor($node);
         $model = [
             'id' => $id,
             'elType' => 'container',
@@ -1655,7 +1656,7 @@ final class Page_Generator_Plugin {
             $children .= "\n" . $this->render_node($child, $child_dimensions);
         }
         $background = !empty($node['background']) ? 'background:' . esc_attr($this->normalize_color($node['background'])) . ';' : '';
-        return '<section class="page-generator-block page-generator-section"' . $block_attrs . ' data-component="' . esc_attr($type) . '" data-source-image="0" style="' . esc_attr($style . $background) . '">' . "\n" . '<div class="page-generator-elements" style="position:relative;width:100%;height:100%;">' . "\n" . $children . "\n" . '</div>' . "\n" . '</section>';
+        return '<section class="page-generator-block page-generator-section"' . $block_attrs . ($this->node_anchor($node) !== '' ? ' id="' . esc_attr($this->node_anchor($node)) . '"' : '') . ' data-component="' . esc_attr($type) . '" data-source-image="0" style="' . esc_attr($style . $background) . '">' . "\n" . '<div class="page-generator-elements" style="position:relative;width:100%;height:100%;">' . "\n" . $children . "\n" . '</div>' . "\n" . '</section>';
     }
 
     private function normalize_color($value) {

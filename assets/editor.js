@@ -408,7 +408,7 @@
             $('#pg-status').html('Поточну WordPress Page оновлено як ' + response.data.status + '. Режим: ' + (response.data.outputMode || 'gutenberg') + '. Блоків: ' + (response.data.blockCount || 0) + '. Рендер: ' + response.data.renderLength + ' символів' + (response.data.elementorMode ? ' (native Elementor tree; HTML fallback лише для складних вузлів)' : '') + '.<br>Порівняння screenshot через Playwright...');
             compareRenderedPage(response.data.compareUrl || response.data.viewUrl, schema, postId).then(function (result) {
                 $('#page-generator-modal').data('schema', schema);
-                $('#pg-status').html('Page оновлено.<br><br>Візуальна відповідність: <strong>' + result.visualSimilarity.toFixed(2) + '%</strong><br>Перцептивна відповідність: <strong>' + Number(result.perceptualSimilarity || 0).toFixed(2) + '%</strong><br>Змістова відповідність: <strong>' + Number(result.contentSimilarity || 0).toFixed(2) + '%</strong>' + (result.worstZone ? ' <span class="page-generator-note">(найгірша зона: колонка ' + (result.worstZone.column + 1) + ', рядок ' + (result.worstZone.row + 1) + ' — ' + Number(result.worstZone.similarity).toFixed(0) + '%)</span>' : '') + '<br>Текстова відповідність: <strong>' + result.textSimilarity.toFixed(2) + '%</strong><br>DOM-відповідність: <strong>' + result.domSimilarity.toFixed(2) + '%</strong><br><span class="page-generator-note">Reference: ' + result.referenceSize + ', rendered: ' + result.renderedSize + ', tokens: ' + result.sourceTokenCount + ' → ' + result.renderedTokenCount + ', nodes: ' + result.sourceNodeCount + ' → ' + result.renderedNodeCount + '.</span>' + (result.renderedUrl ? '<br><a href="' + result.renderedUrl + '" target="_blank" rel="noopener">Відкрити rendered screenshot</a>' : '') + (result.diffUrl ? '<br><a href="' + result.diffUrl + '" target="_blank" rel="noopener">Відкрити diff screenshot</a>' : '') + '<br><br>Найбільші розбіжності:<br>' + (result.differences.length ? result.differences.map(function (item) { return '- ' + item; }).join('<br>') : '- не виявлено') + '<br><br><button type="button" id="pg-finish" class="page-generator-button page-generator-button-primary">Готово</button>');
+                $('#pg-status').html('Page оновлено.' + describeBehavior(schema) + '<br><br>Візуальна відповідність: <strong>' + result.visualSimilarity.toFixed(2) + '%</strong><br>Перцептивна відповідність: <strong>' + Number(result.perceptualSimilarity || 0).toFixed(2) + '%</strong><br>Змістова відповідність: <strong>' + Number(result.contentSimilarity || 0).toFixed(2) + '%</strong>' + (result.worstZone ? ' <span class="page-generator-note">(найгірша зона: колонка ' + (result.worstZone.column + 1) + ', рядок ' + (result.worstZone.row + 1) + ' — ' + Number(result.worstZone.similarity).toFixed(0) + '%)</span>' : '') + '<br>Текстова відповідність: <strong>' + result.textSimilarity.toFixed(2) + '%</strong><br>DOM-відповідність: <strong>' + result.domSimilarity.toFixed(2) + '%</strong><br><span class="page-generator-note">Reference: ' + result.referenceSize + ', rendered: ' + result.renderedSize + ', tokens: ' + result.sourceTokenCount + ' → ' + result.renderedTokenCount + ', nodes: ' + result.sourceNodeCount + ' → ' + result.renderedNodeCount + '.</span>' + (result.renderedUrl ? '<br><a href="' + result.renderedUrl + '" target="_blank" rel="noopener">Відкрити rendered screenshot</a>' : '') + (result.diffUrl ? '<br><a href="' + result.diffUrl + '" target="_blank" rel="noopener">Відкрити diff screenshot</a>' : '') + '<br><br>Найбільші розбіжності:<br>' + (result.differences.length ? result.differences.map(function (item) { return '- ' + item; }).join('<br>') : '- не виявлено') + '<br><br><button type="button" id="pg-finish" class="page-generator-button page-generator-button-primary">Готово</button>');
                 $('#pg-finish').on('click', function () { $('#page-generator-modal').remove(); });
             }).catch(function (error) {
                 var updated = 'Поточну WordPress Page оновлено як ' + response.data.status + '.<br>Screenshot-порівняння не виконано: ' + error.message;
@@ -775,7 +775,7 @@
             var schema = buildScreenshotPageSchema(split.desktop, $('#pg-source-description').val());
             if (split.mobile.length) {
                 // The mobile screenshots become a second layout of the same page, shown below the mobile breakpoint.
-                schema.variants = { mobile: { sections: buildScreenshotPageSchema(split.mobile, $('#pg-source-description').val()).sections } };
+                schema.variants = { mobile: { sections: buildScreenshotPageSchema(split.mobile, $('#pg-source-description').val(), '-m').sections } };
             }
             return uploadBackdrops(schema).then(function () { return uploadGradientImages(schema); }).then(function () { return { schema: schema, analyses: analyses }; });
         }).then(function (built) {
@@ -795,7 +795,7 @@
             });
             var advice = resolutionAdvice.length ? '<br><span class="page-generator-warning">' + resolutionAdvice.map(function (line) { return $('<div>').text(line).html(); }).join('<br>') + '</span>' : '';
             var warning = advice + (nodeStats.unclassified ? '<br><span class="page-generator-warning">Не класифіковано: ' + nodeStats.unclassified + ' регіонів. Це ще не повне дерево.</span>' : '');
-            $('#pg-status').html('Аналіз завершено по етапах: геометрія → секції → семантика → стилі → assets.<br>OCR-слів: ' + analyses.reduce(function (total, item) { return total + item.words.length; }, 0) + ', нормалізованих областей: ' + analyses.reduce(function (total, item) { return total + item.boxes.length; }, 0) + ', вузлів у дереві: ' + nodeStats.total + ', класифікованих: ' + nodeStats.classified + '.' + warning + '<br><span class="page-generator-note">Таблиця: ' + nodeStats.tables + ', форма: ' + nodeStats.forms + ', кнопки: ' + nodeStats.buttons + ', фото: ' + nodeStats.images + ', невпевнені вузли: ' + nodeStats.lowConfidence + '.</span>');
+            $('#pg-status').html('Аналіз завершено по етапах: геометрія → секції → семантика → стилі → assets.<br>OCR-слів: ' + analyses.reduce(function (total, item) { return total + item.words.length; }, 0) + ', нормалізованих областей: ' + analyses.reduce(function (total, item) { return total + item.boxes.length; }, 0) + ', вузлів у дереві: ' + nodeStats.total + ', класифікованих: ' + nodeStats.classified + '.' + warning + '<br><span class="page-generator-note">Таблиця: ' + nodeStats.tables + ', форма: ' + nodeStats.forms + ', кнопки: ' + nodeStats.buttons + ', фото: ' + nodeStats.images + ', невпевнені вузли: ' + nodeStats.lowConfidence + '.</span>' + describeBehavior(schema));
         }).catch(function (error) {
             $('#pg-status').text('Помилка аналізу: ' + error.message);
         }).finally(function () {
@@ -1872,7 +1872,7 @@
         return window.PageGeneratorDetectors.baselineLineHeight(text, height, size);
     }
 
-    function buildScreenshotPageSchema(analyses, description) {
+    function buildScreenshotPageSchema(analyses, description, anchorSuffix) {
         var hints = parseDescription(description || '');
         var sections = [];
         analyses.forEach(function (analysis) {
@@ -1923,7 +1923,7 @@
                 sections.push(section);
             });
         });
-        return {
+        var pageSchema = {
             version: 2,
             title: 'Imported screenshot page',
             containerWidth: Number(PageGeneratorConfig.containerWidth || 1200),
@@ -1933,6 +1933,8 @@
             hints: hints,
             sections: sections
         };
+        applyBehaviorIntents(pageSchema, window.PageGeneratorDetectors.parseBehaviorIntents(description), anchorSuffix);
+        return pageSchema;
     }
 
     function collectPhotoBoxes(nodes, found) {
@@ -3291,6 +3293,150 @@
         var confidence = typeof node.confidence === 'number' ? ' [' + Math.round(node.confidence * 100) + '%]' : '';
         lines.push(new Array(depth + 1).join('│   ') + '├── ' + label + confidence);
         getNodeChildren(node).forEach(function (child) { appendTreeNode(lines, child, depth + 1); });
+    }
+
+    function behaviorNodeText(node) {
+        return String((node && (node.text || node.content)) || '').trim();
+    }
+
+    function eachSchemaNode(node, visit) {
+        visit(node);
+        var kids = node.children && node.children.length ? node.children : (node.elements || []);
+        kids.forEach(function (child) { eachSchemaNode(child, visit); });
+    }
+
+    // The description says what the page does; this acts on what is recognised and reports what was done and what could not be, so nothing is dropped
+    // silently. For now: the items of a menu lead to the sections of the page ("anchors").
+    function applyBehaviorIntents(schema, intents, anchorSuffix) {
+        var report = [];
+        (intents || []).forEach(function (intent) {
+            if (intent.action === 'anchors') report.push(applyMenuAnchors(schema.sections || [], intent, anchorSuffix || ''));
+        });
+        if (report.length) schema.behavior = report;
+    }
+
+    // The menu is the row of navigation links nearest to the top (or bottom) of the page; its items lead, in turn, to the sections after it (before
+    // it, for a bottom menu). An item whose text is found in a section's heading leads to that section; if most items are not found by text, the
+    // order decides.
+    function applyMenuAnchors(sections, intent, anchorSuffix) {
+        var tools = window.PageGeneratorDetectors;
+        var result = { action: 'anchors', region: intent.region, source: intent.source, ok: false, links: [], unlinked: [] };
+        // The menu is found by its look, not by an earlier guess: short one-line labels of one height, side by side, near the top (bottom) of the page.
+        var pageBottom = sections.reduce(function (bottom, section) { return Math.max(bottom, section.bbox ? section.bbox.y + section.bbox.height : 0); }, 0);
+        var rows = [];
+        sections.forEach(function (section, index) {
+            eachSchemaNode(section, function (node) {
+                var label = behaviorNodeText(node);
+                var leaf = !(node.children && node.children.length) && !(node.elements && node.elements.length);
+                if (!leaf || ['text', 'link', 'heading', 'badge'].indexOf(node.type) === -1 || !node.bbox || node.bbox.width > 360 || node.bbox.height < 8) return;
+                if (label.length < 2 || label.length > 30 || (label.match(/[A-Za-zА-Яа-яІіЇїЄєҐґ]/g) || []).length < 2) return;
+                var middle = node.bbox.y + node.bbox.height / 2;
+                var inRegion = intent.region === 'bottom' ? middle > pageBottom * .7 : middle < pageBottom * .25;
+                if (!inRegion) return;
+                // A menu can be cut across two bands of the page (a pill in its middle has a band of its own), so a row is a height, not a band.
+                var row = rows.find(function (candidate) { return Math.abs(candidate.y - middle) <= Math.max(6, node.bbox.height * .4); });
+                if (row) row.nodes.push({ node: node, section: index }); else rows.push({ y: middle, nodes: [{ node: node, section: index }] });
+            });
+        });
+        // A row is cut where the gap is much wider than the text (the search box and icons next to a menu are not menu items).
+        var chunks = [];
+        rows.forEach(function (row) {
+            var ordered = row.nodes.slice().sort(function (a, b) { return a.node.bbox.x - b.node.bbox.x; });
+            var heights = ordered.map(function (entry) { return entry.node.bbox.height; }).sort(function (a, b) { return a - b; });
+            var limit = Math.max(48, heights[Math.floor(heights.length / 2)] * 3);
+            var current = [];
+            var flush = function () {
+                if (!current.length) return;
+                chunks.push({ section: Math.max.apply(null, current.map(function (entry) { return entry.section; })), y: row.y, items: current.map(function (entry) { return entry.node; }) });
+                current = [];
+            };
+            ordered.forEach(function (entry) {
+                var last = current[current.length - 1];
+                // OCR boxes of one menu differ in height with the letters in them (ascenders, descenders): twofold is still one size; a pill around a label is as tall as its padding, so it is not measured.
+                var similar = !last || last.node.type === 'badge' || entry.node.type === 'badge' || Math.max(last.node.bbox.height, entry.node.bbox.height) <= Math.min(last.node.bbox.height, entry.node.bbox.height) * 2.2;
+                if (last && (entry.node.bbox.x - (last.node.bbox.x + last.node.bbox.width) > limit || !similar)) flush();
+                current.push(entry);
+            });
+            flush();
+        });
+        var rows = chunks.filter(function (chunk) { return chunk.items.length >= (intent.count && intent.count < 3 ? 2 : 3); });
+        if (!rows.length) { result.message = 'Меню з підписами в один ряд на знімку не знайдено.'; return result; }
+        var pool = intent.count ? rows.filter(function (row) { return row.items.length === intent.count; }) : [];
+        if (!pool.length) pool = rows;
+        var menu = pool.slice().sort(function (a, b) {
+            if (!intent.count && a.items.length !== b.items.length) return b.items.length - a.items.length;
+            return intent.region === 'bottom' ? b.y - a.y : a.y - b.y;
+        })[0];
+        if (intent.count && menu.items.length !== intent.count) result.message = 'В описі ' + intent.count + ' пунктів, на знімку знайдено ' + menu.items.length + '.';
+        var items = menu.items;
+        var targets = sections.map(function (section, index) { return { section: section, index: index }; }).filter(function (target) {
+            return target.index !== menu.section && (intent.region === 'bottom' ? target.index < menu.section : target.index > menu.section);
+        });
+        if (!targets.length) { result.message = (result.message ? result.message + ' ' : '') + 'Після меню немає розділів, до яких можна вести.'; return result; }
+        var normalize = function (text) { return String(text).toLowerCase().replace(/[^a-zа-яіїєґ0-9]+/g, ' ').trim(); };
+        var texts = function (target, headingsOnly) {
+            var found = [];
+            eachSchemaNode(target.section, function (node) {
+                if ((node.type === 'heading' || (!headingsOnly && node.type === 'text')) && behaviorNodeText(node)) found.push(normalize(behaviorNodeText(node)));
+            });
+            return found.join(' | ');
+        };
+        var mentions = function (haystack, label) {
+            var key = normalize(label);
+            if (key.length < 3) return false;
+            if (haystack.indexOf(key) !== -1) return true;
+            // Word endings differ ("Контакти" / "Контактів"): the first five letters of a longer word decide.
+            return key.split(' ').some(function (word) { return word.length >= 5 && haystack.indexOf(word.slice(0, 5)) !== -1; });
+        };
+        var taken = {};
+        var chosen = items.map(function (item) {
+            var label = behaviorNodeText(item);
+            var hit = targets.find(function (target) { return !taken[target.index] && mentions(texts(target, true), label); }) ||
+                targets.find(function (target) { return !taken[target.index] && mentions(texts(target, false), label); });
+            if (hit) taken[hit.index] = true;
+            return hit || null;
+        });
+        var byText = chosen.filter(Boolean).length * 2 >= items.length;
+        result.mode = byText ? 'text' : 'order';
+        if (!byText) chosen = items.map(function (item, position) { return targets[position] || null; });
+        var names = {};
+        chosen.forEach(function (target, position) {
+            var item = items[position];
+            if (!target) { result.unlinked.push(behaviorNodeText(item)); return; }
+            var section = target.section;
+            if (!section.anchor) {
+                var base = tools.slugify(texts(target, true).split(' | ')[0] || texts(target, false).split(' | ')[0]) || 'section-' + (target.index + 1);
+                var name = base;
+                for (var copy = 2; names[name + anchorSuffix]; copy += 1) name = base + '-' + copy;
+                names[name + anchorSuffix] = true;
+                section.anchor = name + anchorSuffix;
+            }
+            item.type = 'link';
+            item.role = 'navigation-item';
+            item.behavior = { type: 'anchor', url: '#' + section.anchor, target: section.id };
+            result.links.push({ text: behaviorNodeText(item), anchor: section.anchor });
+        });
+        result.ok = result.links.length > 0;
+        if (!result.ok && !result.message) result.message = 'Пункти меню не вдалося зіставити з розділами.';
+        return result;
+    }
+
+    // What the description turned into, as text for the status line (the person reads it after the build).
+    function describeBehavior(schema) {
+        var esc = function (text) { return $('<div>').text(text).html(); };
+        var lines = [];
+        (schema.behavior || []).forEach(function (entry) {
+            if (entry.ok) {
+                lines.push('Якорі меню (' + (entry.mode === 'text' ? 'за назвами розділів' : 'за порядком') + '): ' + entry.links.map(function (link) { return esc(link.text) + ' → #' + esc(link.anchor); }).join(', ') +
+                    (entry.unlinked.length ? '. <span class="page-generator-warning">Без розділу: ' + entry.unlinked.map(esc).join(', ') + '</span>' : '') +
+                    (entry.message ? '. <span class="page-generator-warning">' + esc(entry.message) + '</span>' : ''));
+            } else {
+                lines.push('<span class="page-generator-warning">Не застосовано: «' + esc(entry.source) + '». ' + esc(entry.message || '') + '</span>');
+            }
+        });
+        var unused = (schema.hints || []).map(function (hint) { return hint.type; }).filter(function (type, index, all) { return all.indexOf(type) === index; });
+        if (unused.length) lines.push('<span class="page-generator-note">Згадано в описі, але ще не застосовується: ' + unused.map(esc).join(', ') + '.</span>');
+        return lines.length ? '<br>' + lines.join('<br>') : '';
     }
 
     function parseDescription(description) {

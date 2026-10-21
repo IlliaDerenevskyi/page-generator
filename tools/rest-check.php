@@ -396,6 +396,31 @@ $call('PUT', $route, ['schema' => $call('GET', $route)->get_data()['schema'], 'l
 $check('a rebuilt Elementor flow page keeps the edited margin', strpos(get_post_meta($post, '_elementor_data', true), '"top":"61"') !== false);
 $call('PUT', $route, ['schema' => $sync_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
 
+// Anchors: node.anchor is the id of a section (Gutenberg anchor, Elementor CSS ID, HTML id); an edit made in an editor is read back.
+$anchor_schema = $flow_schema;
+$anchor_id = (string) ($anchor_schema['sections'][0]['id'] ?? '');
+$anchor_schema['sections'][0]['anchor'] = 'intro-section';
+$call('PUT', $route, ['schema' => $anchor_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
+$anchor_content = get_post($post)->post_content;
+$check('a section anchor is written as the block anchor and the id of its div', strpos($anchor_content, '"anchor":"intro-section"') !== false && strpos($anchor_content, 'id="intro-section"') !== false);
+$check('an anchor that is not URL-safe is not written', strpos(preg_replace('/"anchor":"intro-section"/', '', $anchor_content), '"anchor"') === false);
+$bad_anchor = $anchor_schema;
+$bad_anchor['sections'][0]['anchor'] = 'a b"><script>';
+$call('PUT', $route, ['schema' => $bad_anchor, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
+$check('an unsafe anchor never reaches the markup', strpos(get_post($post)->post_content, '<script>') === false && strpos(get_post($post)->post_content, '"anchor"') === false);
+$call('PUT', $route, ['schema' => $anchor_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
+$rename_anchor = function ($blocks) use (&$rename_anchor, $anchor_id) {
+    foreach ($blocks as &$block) {
+        if (($block['attrs']['pgId'] ?? '') === $anchor_id) $block['attrs']['anchor'] = 'renamed-section';
+        if (!empty($block['innerBlocks'])) $block['innerBlocks'] = $rename_anchor($block['innerBlocks']);
+    }
+    return $blocks;
+};
+wp_update_post(['ID' => $post, 'post_content' => wp_slash(serialize_blocks($rename_anchor(parse_blocks(get_post($post)->post_content))))]);
+$check('an anchor edited in Gutenberg reaches the node', ($flow_node($anchor_id)['anchor'] ?? '') === 'renamed-section');
+$call('PUT', $route, ['schema' => $anchor_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$check('a section anchor becomes the CSS ID of the Elementor container', strpos(get_post_meta($post, '_elementor_data', true), '"_element_id":"intro-section"') !== false);
+
 // Font family names: style.fontFamily holds a slug of a shipped web font; both exporters write its class, the bridges read it back.
 $font_schema = $flow_schema;
 $set_font = function (&$nodes) use (&$set_font) {

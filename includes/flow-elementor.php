@@ -101,6 +101,7 @@ trait Page_Generator_Flow_Elementor {
             $settings['overflow'] = 'auto';
         }
         if ($box['h'] > 0 && !$root) $settings['min_height'] = $this->el_size('px', $box['h']);
+        if ($this->node_anchor($node) !== '') $settings['_element_id'] = $this->node_anchor($node);
         $model = ['id' => $this->flow_id($node), 'elType' => 'container', 'isInner' => !$root, 'settings' => $settings, 'elements' => $inner['elements']];
         return $this->elementor_flow_slot($model, $slot, $box, $node);
     }
