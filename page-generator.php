@@ -14,11 +14,13 @@ require_once __DIR__ . '/includes/elementor-sync.php';
 require_once __DIR__ . '/includes/wpforms-export.php';
 require_once __DIR__ . '/includes/flow-layout.php';
 require_once __DIR__ . '/includes/flow-elementor.php';
+require_once __DIR__ . '/includes/flow-spacing.php';
 
 final class Page_Generator_Plugin {
     use Page_Generator_Native_Blocks;
     use Page_Generator_Block_Sync;
     use Page_Generator_Elementor_Sync;
+    use Page_Generator_Flow_Spacing;
     use Page_Generator_WPForms_Export;
     use Page_Generator_Flow_Layout;
     use Page_Generator_Flow_Elementor;
@@ -772,6 +774,8 @@ final class Page_Generator_Plugin {
             delete_post_meta($post_id, '_elementor_edit_mode');
         }
         $this->store_block_ids($post_id, $block_content);
+        $this->fsp_save_state($post_id, '_page_generator_flow_state', $this->flow_enabled && !$elementor_mode ? $this->fsp_state_from_blocks(parse_blocks($block_content)) : []);
+        $this->fsp_save_state($post_id, '_page_generator_el_flow_state', $this->flow_enabled && $elementor_mode && isset($elementor_data) ? $this->fsp_state_from_elementor($elementor_data) : []);
         update_post_meta($post_id, '_page_generator_output_mode', $elementor_mode ? 'elementor-native-tree' : 'gutenberg-native-blocks');
         update_post_meta($post_id, '_page_generator_render_length', strlen($rendered_html));
         update_post_meta($post_id, '_page_generator_render_hash', md5($rendered_html));
@@ -963,7 +967,9 @@ final class Page_Generator_Plugin {
     }
 
     private function render_block_content($schema) {
-        return $this->flow_enabled ? $this->native_flow_content($schema) : $this->native_content($schema);
+        if (!$this->flow_enabled) return $this->native_content($schema);
+        // Spacing the user changed in an editor replaces the measured one (see includes/flow-spacing.php).
+        return $this->fsp_apply_to_content($this->native_flow_content($schema), $this->fsp_overrides($schema));
     }
 
     private function is_elementor_page($post_id) {

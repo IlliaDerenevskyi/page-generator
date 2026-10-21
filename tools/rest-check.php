@@ -346,6 +346,56 @@ update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($ramp_swapped
 call_user_func($el_sync, $stub, ['elements' => $ramp_swapped]);
 $check('the picture of a ramp changed in Elementor reaches gradientImage, not backgroundImage', ($picture_section()['style']['gradientImage']['url'] ?? '') === 'http://localhost/wp-content/uploads/ramp-b.png' && empty($picture_section()['style']['backgroundImage']) && count($picture_section()['style']['gradient']['stops'] ?? []) === 4);
 
+
+// Spacing of a flow page edited in the editors (top margin, left offset, gap, padding) is remembered as overrides in style.flow.
+$flow_node = function ($id) use ($call, $route) {
+    $found = null;
+    $walk = function ($nodes) use (&$walk, &$found, $id) { foreach ((array) $nodes as $n) { if (is_array($n) && ($n['id'] ?? '') === $id) $found = $n; if (is_array($n)) $walk($n['children'] ?? []); } };
+    $walk($call('GET', $route)->get_data()['schema']['sections']);
+    return $found;
+};
+$flow_schema = $sync_schema;
+$call('PUT', $route, ['schema' => $flow_schema, 'layout' => 'flow', 'editorMode' => 'gutenberg']);
+$flow_content = get_post($post)->post_content;
+$check('a flow page remembers the spacing it was exported with', is_array(json_decode(get_post_meta($post, '_page_generator_flow_state', true), true)) && strpos(get_post_meta($post, '_page_generator_flow_state', true), '"t1"') !== false);
+$set_spacing = function ($blocks) use (&$set_spacing) {
+    foreach ($blocks as &$block) {
+        if (($block['attrs']['pgId'] ?? '') === 't1' && is_array($block['attrs']['pgFlow'] ?? null)) { $block['attrs']['pgFlow']['mt'] = 77; $block['attrs']['pgFlow']['ml'] = 33; }
+        if (!empty($block['innerBlocks'])) $block['innerBlocks'] = $set_spacing($block['innerBlocks']);
+    }
+    return $blocks;
+};
+wp_update_post(['ID' => $post, 'post_content' => wp_slash(serialize_blocks($set_spacing(parse_blocks($flow_content))))]);
+$check('spacing edited in a block reaches style.flow of its node', (int) ($flow_node('t1')['style']['flow']['mt'] ?? -1) === 77 && (int) ($flow_node('t1')['style']['flow']['ml'] ?? -1) === 33);
+$check('spacing that was not touched is not turned into an override', empty($flow_node('b1')['style']['flow']));
+$flow_hash = md5(get_post_meta($post, '_page_generator_schema', true));
+wp_update_post(['ID' => $post, 'post_content' => wp_slash(get_post($post)->post_content)]);
+$check('saving the same spacing again leaves the schema alone', md5(get_post_meta($post, '_page_generator_schema', true)) === $flow_hash);
+$call('PUT', $route, ['schema' => $call('GET', $route)->get_data()['schema'], 'layout' => 'flow', 'editorMode' => 'gutenberg']);
+$check('a rebuilt flow page keeps the edited spacing', preg_match('/"pgId":"t1".*?"pgFlow":\{[^}]*"mt":77/s', get_post($post)->post_content) === 1 || preg_match('/"pgFlow":\{[^}]*"mt":77[^}]*\}[^}]*"pgId":"t1"/s', get_post($post)->post_content) === 1);
+
+$call('PUT', $route, ['schema' => $flow_schema, 'layout' => 'flow', 'editorMode' => 'elementor']);
+$flow_tree = json_decode(get_post_meta($post, '_elementor_data', true), true);
+$check('an Elementor flow page remembers the spacing it was exported with', strpos(get_post_meta($post, '_page_generator_el_flow_state', true), '"mt"') !== false);
+$set_margin = function (&$nodes) use (&$set_margin) {
+    foreach ($nodes as &$n) {
+        if (in_array($n['id'] ?? '', ['t1', 't1p'], true)) {
+            $key = ($n['elType'] ?? '') === 'container' ? 'margin' : '_margin';
+            $n['settings'][$key] = ['unit' => 'px', 'top' => '61', 'right' => '0', 'bottom' => '0', 'left' => '0', 'isLinked' => false];
+        }
+        if (!empty($n['elements'])) $set_margin($n['elements']);
+    }
+    unset($n);
+};
+$margin_tree = $flow_tree;
+$set_margin($margin_tree);
+update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($margin_tree)));
+call_user_func($el_sync, $stub, ['elements' => $margin_tree]);
+$check('a margin edited in Elementor reaches style.flow of its node', (int) ($flow_node('t1')['style']['flow']['mt'] ?? -1) === 61);
+$call('PUT', $route, ['schema' => $call('GET', $route)->get_data()['schema'], 'layout' => 'flow', 'editorMode' => 'elementor']);
+$check('a rebuilt Elementor flow page keeps the edited margin', strpos(get_post_meta($post, '_elementor_data', true), '"top":"61"') !== false);
+$call('PUT', $route, ['schema' => $sync_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
+
 $call('PUT', $route, ['schema' => $schema, 'editorMode' => 'gutenberg']);
 $call('PUT', $route, ['schema' => $schema]);
 exit($failed ? 1 : 0);

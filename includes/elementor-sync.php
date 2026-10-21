@@ -39,7 +39,9 @@ trait Page_Generator_Elementor_Sync {
         $elements = is_array($data['elements'] ?? null) ? $data['elements'] : json_decode((string) get_post_meta($post_id, '_elementor_data', true), true);
         if (!is_array($elements)) return;
         $previous = json_decode((string) get_post_meta($post_id, '_page_generator_el_ids', true), true);
-        $result = $this->merge_elementor_into_schema($schema, $elements, is_array($previous) ? $previous : []);
+        $flow_state = $this->fsp_load_state($post_id, '_page_generator_el_flow_state');
+        $result = $this->merge_elementor_into_schema($schema, $elements, is_array($previous) ? $previous : [], $flow_state);
+        $this->fsp_save_state($post_id, '_page_generator_el_flow_state', $result['flowState'] ?? []);
         if ($result['changed']) {
             update_post_meta($post_id, '_page_generator_schema', wp_slash(wp_json_encode($result['schema'])));
         }
@@ -47,7 +49,7 @@ trait Page_Generator_Elementor_Sync {
     }
 
     /** Pure part (used by the tests): returns ['schema' => merged schema, 'changed' => bool]. */
-    public function merge_elementor_into_schema($schema, $elements, $previous = []) {
+    public function merge_elementor_into_schema($schema, $elements, $previous = [], $flow_state = null) {
         $index = [];
         if (!empty($schema['sections']) && is_array($schema['sections'])) $this->sync_index($schema['sections'], $index);
         if (!empty($schema['variants']['mobile']['sections']) && is_array($schema['variants']['mobile']['sections'])) {
@@ -55,6 +57,21 @@ trait Page_Generator_Elementor_Sync {
         }
         $state = ['changed' => false, 'seen' => [], 'orders' => [], 'index' => &$index];
         $this->elsync_walk($elements, ['x' => 0, 'y' => 0], null, $state);
+        // Spacing edited in a flow page (see flow-spacing.php): element ids map to node ids ("p" marks a plate around a widget).
+        $flow_current = $this->fsp_state_from_elementor($elements);
+        if (is_array($flow_state)) {
+            $by_node = [];
+            foreach ($flow_current as $element_id => $spacing) {
+                $node_id = isset($state['index'][$element_id]) ? $element_id : (substr($element_id, -1) === 'p' && isset($state['index'][substr($element_id, 0, -1)]) ? substr($element_id, 0, -1) : null);
+                if ($node_id === null || !isset($flow_state[$element_id])) continue;
+                $diff = [];
+                foreach ($spacing as $key => $value) if (!array_key_exists($key, $flow_state[$element_id]) || !$this->fsp_same($flow_state[$element_id][$key], $value)) $diff[$key] = $value;
+                if ($diff) $by_node[$node_id] = array_merge($by_node[$node_id] ?? [], $diff);
+            }
+            foreach ($by_node as $node_id => $diff) {
+                if ($this->fsp_record_edits([$node_id => $diff], [$node_id => []], $state['index'])) $state['changed'] = true;
+            }
+        }
         // Nodes whose element is gone (the node itself or its plate).
         $removed = [];
         foreach ($previous as $element_id) {
@@ -77,7 +94,7 @@ trait Page_Generator_Elementor_Sync {
                 $schema['variants']['mobile']['sections'] = $this->sync_apply_orders($schema['variants']['mobile']['sections'], $state['orders'], $state);
             }
         }
-        return ['schema' => $schema, 'changed' => $state['changed']];
+        return ['schema' => $schema, 'changed' => $state['changed'], 'flowState' => $flow_current];
     }
 
     private function el_read_size($value) {

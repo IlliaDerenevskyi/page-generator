@@ -114,6 +114,10 @@ trait Page_Generator_Flow_Elementor {
         if (!$model) return null;
         $container = $model['elType'] === 'container';
         $p = $container ? '' : '_';
+        // Spacing edited in an editor replaces the measured one (see includes/flow-spacing.php).
+        $override = is_array($node['style']['flow'] ?? null) ? $node['style']['flow'] : [];
+        if (array_key_exists('mt', $override) && is_numeric($override['mt'])) $slot['mt'] = $override['mt'];
+        if (array_key_exists('ml', $override)) $slot['ml'] = $override['ml'];
         if (isset($slot['mt']) || isset($slot['ml']) && is_numeric($slot['ml'])) {
             $margin_top = (float) ($slot['mt'] ?? 0);
             $margin_left = isset($slot['ml']) && is_numeric($slot['ml']) ? (float) $slot['ml'] : 0;
@@ -171,7 +175,7 @@ trait Page_Generator_Flow_Elementor {
             if (($model['widgetType'] ?? '') === 'button') $model['settings']['align'] = 'left';
         }
         $model['elements'] = $this->elementor_flow_mobile_fonts($model['elements'] ?? []);
-        return $model;
+        return $this->fsp_apply_to_model($model, $node);
     }
 
     // Phone sizes for widgets nested inside a plate that was built by the shared serializer.

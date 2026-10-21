@@ -43,7 +43,9 @@ trait Page_Generator_Block_Sync {
         $schema = $this->rest_saved_schema($post_id);
         if (!$schema) return;
         $previous = json_decode((string) get_post_meta($post_id, '_page_generator_block_ids', true), true);
-        $result = $this->merge_blocks_into_schema($schema, parse_blocks($post->post_content), is_array($previous) ? $previous : []);
+        $flow_state = $this->fsp_load_state($post_id, '_page_generator_flow_state');
+        $result = $this->merge_blocks_into_schema($schema, parse_blocks($post->post_content), is_array($previous) ? $previous : [], $flow_state);
+        $this->fsp_save_state($post_id, '_page_generator_flow_state', $result['flowState'] ?? []);
         if ($result['changed']) {
             update_post_meta($post_id, '_page_generator_schema', wp_slash(wp_json_encode($result['schema'])));
         }
@@ -62,7 +64,7 @@ trait Page_Generator_Block_Sync {
      * Pure part (used by the tests): returns ['schema' => merged schema, 'changed' => bool, 'content' => serialized blocks or null].
      * `$previous` is the list of node ids the blocks carried before this edit; ids that vanished from the blocks lose their node.
      */
-    public function merge_blocks_into_schema($schema, $blocks, $previous = []) {
+    public function merge_blocks_into_schema($schema, $blocks, $previous = [], $flow_state = null) {
         $index = [];
         foreach (['sections'] as $key) {
             if (!empty($schema[$key]) && is_array($schema[$key])) $this->sync_index($schema[$key], $index);
@@ -72,6 +74,9 @@ trait Page_Generator_Block_Sync {
         }
         $state = ['changed' => false, 'seen' => [], 'created' => false, 'orders' => [], 'index' => &$index];
         $blocks = $this->sync_walk($blocks, ['x' => 0, 'y' => 0], null, $state);
+        // Spacing edited in a flow page (see flow-spacing.php).
+        $flow_current = $this->fsp_state_from_blocks($blocks);
+        if ($this->fsp_record_edits($flow_current, $flow_state, $state['index'])) $state['changed'] = true;
         // Nodes whose block is gone.
         $removed = array_values(array_diff($previous, array_keys($state['seen'])));
         if ($removed) {
@@ -88,7 +93,7 @@ trait Page_Generator_Block_Sync {
                 $schema['variants']['mobile']['sections'] = $this->sync_apply_orders($schema['variants']['mobile']['sections'], $state['orders'], $state);
             }
         }
-        return ['schema' => $schema, 'changed' => $state['changed'], 'content' => $state['created'] ? serialize_blocks($blocks) : null];
+        return ['schema' => $schema, 'changed' => $state['changed'], 'content' => $state['created'] ? serialize_blocks($blocks) : null, 'flowState' => $flow_current];
     }
 
     private function sync_index(&$nodes, &$index) {
