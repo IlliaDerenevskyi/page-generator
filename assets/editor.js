@@ -1747,6 +1747,31 @@
         return Math.sqrt(variance / samples.length);
     }
 
+    // The font size from the height of a line's ink. The ink spans from the top of the tallest letter to the bottom of the lowest one, and
+    // both depend on the text: capitals, digits and ascenders (b d f h k l t) reach about .73 of the size above the baseline, a line of
+    // small round letters only .53; descenders (g j p q y , ;) reach .21 below it. Reading every line as .9 of its height made text 10-25% small.
+    var fontSizeCanvas = null;
+
+    // The font size from the height of a line's ink. The ink spans from the top of the tallest letter to the bottom of the lowest one, and
+    // both depend on the text: capitals, digits and ascenders (b d f h k l t) reach about .73 of the size above the baseline, a line of
+    // small round letters only .53; descenders (g j p q y , ;) reach .21 below it. Reading every line as .9 of its height made text 10-25%
+    // small. The size never exceeds what makes the line fit its box in Arial (a wider face than the screenshot's would be shrunk by
+    // assets/text-fit.js anyway) nor falls under .9 of the height.
+    function estimateFontSize(height, text, width) {
+        var size = window.PageGeneratorDetectors.inkFontSize(height, text);
+        if (width > 0 && String(text || '').length >= 6) {
+            fontSizeCanvas = fontSizeCanvas || document.createElement('canvas').getContext('2d');
+            fontSizeCanvas.font = '400 ' + Math.round(size) + 'px Arial';
+            var predicted = fontSizeCanvas.measureText(String(text)).width;
+            if (predicted > 0 && width < predicted) size = Math.max(height * .9, size * width / predicted);
+        }
+        return Math.max(10, Math.round(size));
+    }
+
+    function estimateLineHeight(text, height, size) {
+        return window.PageGeneratorDetectors.baselineLineHeight(text, height, size);
+    }
+
     function buildScreenshotPageSchema(analyses, description) {
         var hints = parseDescription(description || '');
         var sections = [];
@@ -1765,9 +1790,10 @@
                     content: text,
                     text: text,
                     bbox: { x: line.x, y: line.y, width: line.width, height: line.height },
-                    settings: { x: line.x, y: line.y, width: line.width, height: line.height, fontSize: Math.max(10, Math.round(line.height * .9)) },
+                    settings: { x: line.x, y: line.y, width: line.width, height: line.height, fontSize: estimateFontSize(line.height, text, line.width) },
                     style: {
-                        fontSize: Math.max(10, Math.round(line.height * .9)),
+                        fontSize: estimateFontSize(line.height, text, line.width),
+                        lineHeight: estimateLineHeight(text, line.height, estimateFontSize(line.height, text, line.width)),
                         fontWeight: fontWeightFromInk(measureInkDensity(analysis.canvas, line)),
                         color: sampleTextColor(analysis.canvas, line, '#334155')
                     },

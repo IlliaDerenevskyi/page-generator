@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, isMonospaceLine } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, isMonospaceLine, inkFontSize, baselineLineHeight } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -539,4 +539,17 @@ test('detectLinearGradient keeps every real bend of a multi-colour ramp and drop
         const f = two.stops[1].pos / 100;
         assert.ok(a.every((v, k) => Math.abs(m[k] - (v + (b[k] - v) * f)) < 24), 'the middle stop of a two-colour ramp sits on the line');
     }
+});
+
+test('the font size follows the ink height of the text, and the line height keeps the baseline in place', () => {
+    // 20 px of ink: capitals and descenders span .94 of the size, small round letters alone only .53
+    assert.ok(Math.abs(inkFontSize(20, 'Hello gap') - 20 / .94) < .01);
+    assert.ok(Math.abs(inkFontSize(20, 'ace') - 20 / .53) < .01);
+    assert.ok(Math.abs(inkFontSize(20, 'Hello') - 20 / .73) < .01);
+    // size 21, ink 20 with capitals and descenders: the baseline is .73 × 20 / .94 below the top
+    const lineHeight = baselineLineHeight('Hello gap', 20, 21);
+    assert.ok(Math.abs(lineHeight - (2 * .73 * 20 / .94 / 21 - .693)) < .002);
+    // that line box places the baseline of Arial (ascent .905, descent .212) where the screenshot has it
+    const baseline = (lineHeight * 21 - 1.117 * 21) / 2 + .905 * 21;
+    assert.ok(Math.abs(baseline - .73 * 20 / .94) < .05);
 });

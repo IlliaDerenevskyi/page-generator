@@ -1058,6 +1058,31 @@
         return spread / mean <= 0.035 && mean / height >= 0.45 && mean / height <= 0.95;
     }
 
+    // How far a line's letters reach above and below the baseline, in units of the font size, read from its text. Capitals, digits and the
+    // ascenders (b d f h k l t) reach about .73 above it, a line of small round letters only .53; descenders (g j p q y , ;) reach .21 below.
+    function inkProfile(text) {
+        var value = String(text || '');
+        return {
+            top: /[A-ZА-ЯІЇЄҐ0-9bdfhklt!?"'\/&%$#()\[\]{}|@бфъйЙ]/.test(value) ? .73 : .53,
+            bottom: /[gjpqy,;()\[\]{}|@Qрудцщф]/.test(value) ? .21 : 0
+        };
+    }
+
+    // The font size that gives a line of this text the measured ink height.
+    function inkFontSize(height, text) {
+        var ink = inkProfile(text);
+        return height / (ink.top + ink.bottom);
+    }
+
+    // The line height (a multiple of the size) that puts the baseline where the screenshot has it. The ink top of the line is at the block's
+    // top, so the baseline lies B = top × (ink height / (top + bottom)) below it; in a line box of height L it lies
+    // (L - (ascent + descent)) / 2 + ascent below the box top (Arial: .905 and .212), which gives L = 2B - .693 × size.
+    function baselineLineHeight(text, height, size) {
+        var ink = inkProfile(text);
+        var baseline = ink.top * height / (ink.top + ink.bottom);
+        return Math.max(.5, Math.round((2 * baseline / size - .693) * 1000) / 1000);
+    }
+
     // Serif or sans, read from the glyphs of one text line. Serif faces have thick vertical stems and thin horizontal strokes
     // (serifs, crossbars), sans faces draw both at about the same weight. The ratio of the median stem width to the median
     // thickness of the short vertical runs tells them apart. Returns null when the line is too small or too sparse to judge.
@@ -1566,6 +1591,8 @@
         sharpen: sharpen,
         prepareForOcr: prepareForOcr,
         classifyTypeface: classifyTypeface,
+        inkFontSize: inkFontSize,
+        baselineLineHeight: baselineLineHeight,
         isMonospaceLine: isMonospaceLine,
         scriptEvidence: scriptEvidence,
         needsLatinReread: needsLatinReread,

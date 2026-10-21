@@ -32,7 +32,8 @@
     width: auto;
     min-width: calc(var(--pg-w, 0) * var(--pg-k));
     white-space: nowrap;
-    line-height: 1.2;
+    /* --pg-lh puts the baseline where the screenshot has it; without it 1.2 (see assets/editor.js, estimateLineHeight). */
+    line-height: var(--pg-lh, 1.2);
 }
 .page-generator-canvas .pg-abs.wp-block-group,
 .page-generator-canvas .pg-abs.wp-block-group.has-background {

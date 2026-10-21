@@ -55,7 +55,7 @@ trait Page_Generator_Native_Blocks {
         $variables = '';
         $classes = [];
         if ($box) {
-            foreach (['x', 'y', 'w', 'h', 'fs'] as $key) {
+            foreach (['x', 'y', 'w', 'h', 'fs', 'lh'] as $key) {
                 if (isset($box[$key]) && is_numeric($box[$key])) {
                     $variables .= '--pg-' . $key . ':' . (0 + $box[$key]) . ';';
                 }
@@ -157,6 +157,10 @@ trait Page_Generator_Native_Blocks {
         $font = $style['fontSize'] ?? ($node['settings']['fontSize'] ?? null);
         if (is_numeric($font) && $font > 0) {
             $box['fs'] = $this->native_number($font);
+        }
+        // The line box that puts the baseline where the screenshot has it (see estimateLineHeight in editor.js).
+        if (isset($style['lineHeight']) && is_numeric($style['lineHeight']) && $style['lineHeight'] > 0 && $style['lineHeight'] < 3) {
+            $box['lh'] = $this->native_number($style['lineHeight']);
         }
         return $box;
     }

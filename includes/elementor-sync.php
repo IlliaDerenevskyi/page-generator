@@ -253,6 +253,18 @@ trait Page_Generator_Elementor_Sync {
             if (($settings['background_background'] ?? '') === 'classic') {
                 $fill = $this->native_color($settings['background_color'] ?? '');
                 if ($fill !== '' && empty($style['gradient'])) $set('background', $fill);
+                // The picture behind a container: a soft backdrop cut from the screenshot, or the picture of a ramp with more than three stops
+                // (see elementor_plate_settings). Changing or removing it in Elementor changes or removes it on the node.
+                $image = is_array($settings['background_image'] ?? null) ? $settings['background_image'] : [];
+                $image_url = esc_url_raw((string) ($image['url'] ?? ''));
+                $image_key = !empty($style['gradient']['stops']) && count($style['gradient']['stops']) > 3 ? 'gradientImage' : 'backgroundImage';
+                if ($image_url !== '') {
+                    $picture = ['url' => $image_url, 'attachmentId' => absint($image['id'] ?? 0)];
+                    if (($style[$image_key] ?? null) !== $picture) { $style[$image_key] = $picture; $changed = true; }
+                } elseif (!empty($style[$image_key])) {
+                    unset($style[$image_key]);
+                    $changed = true;
+                }
             }
             $radius = $this->elsync_radius($settings['border_radius'] ?? null);
             if ($radius !== null && $radius !== absint($style['borderRadius'] ?? 0)) $set('borderRadius', $radius);

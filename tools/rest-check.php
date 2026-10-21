@@ -310,6 +310,42 @@ update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($reversed_tre
 call_user_func($el_sync, $stub, ['elements' => $reversed_tree]);
 $check('elements moved in Elementor reorder their nodes', $child_ids('s1') === ['b1', 't2', 't1']);
 
+
+// Pictures behind a container (a backdrop, or the picture of a ramp with more than three stops) come back from Elementor.
+$pic_schema = $sync_schema;
+$pic_schema['sections'][0]['style'] = ['background' => '#ffffff', 'backgroundImage' => ['url' => 'http://localhost/wp-content/uploads/pic-a.jpg', 'attachmentId' => 0]];
+$call('PUT', $route, ['schema' => $pic_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$pic_tree = json_decode(get_post_meta($post, '_elementor_data', true), true);
+$set_picture = function (&$nodes, $url) use (&$set_picture) {
+    foreach ($nodes as &$n) {
+        if (($n['id'] ?? '') === 's1') $n['settings']['background_image'] = $url === '' ? ['url' => '', 'id' => ''] : ['url' => $url, 'id' => 7];
+        elseif (!empty($n['elements'])) $set_picture($n['elements'], $url);
+    }
+    unset($n);
+};
+$picture_section = function () use ($call, $route) { foreach ($call('GET', $route)->get_data()['schema']['sections'] as $sec) if (($sec['id'] ?? '') === 's1') return $sec; return []; };
+$check('a backdrop picture is exported as the container background', ($pic_tree[0]['settings']['background_image']['url'] ?? '') === 'http://localhost/wp-content/uploads/pic-a.jpg' || strpos(json_encode($pic_tree), 'pic-a.jpg') !== false);
+$swapped = $pic_tree;
+$set_picture($swapped, 'http://localhost/wp-content/uploads/pic-b.jpg');
+update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($swapped)));
+call_user_func($el_sync, $stub, ['elements' => $swapped]);
+$check('a backdrop picture changed in Elementor reaches the schema', ($picture_section()['style']['backgroundImage']['url'] ?? '') === 'http://localhost/wp-content/uploads/pic-b.jpg' && (int) ($picture_section()['style']['backgroundImage']['attachmentId'] ?? 0) === 7);
+$cleared = $pic_tree;
+$set_picture($cleared, '');
+update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($cleared)));
+call_user_func($el_sync, $stub, ['elements' => $cleared]);
+$check('a backdrop picture removed in Elementor leaves the schema', empty($picture_section()['style']['backgroundImage']));
+$ramp_schema = $sync_schema;
+$ramp_schema['sections'][0]['style'] = ['background' => '#e11d48', 'gradient' => ['type' => 'linear', 'angle' => 90, 'stops' => [['pos' => 0, 'color' => '#e11d48'], ['pos' => 33, 'color' => '#f59e0b'], ['pos' => 66, 'color' => '#10b981'], ['pos' => 100, 'color' => '#2563eb']]], 'gradientImage' => ['url' => 'http://localhost/wp-content/uploads/ramp-a.png', 'attachmentId' => 0]];
+$call('PUT', $route, ['schema' => $ramp_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$ramp_tree = json_decode(get_post_meta($post, '_elementor_data', true), true);
+$check('a ramp of four stops is exported as a picture in Elementor', strpos(json_encode($ramp_tree), 'ramp-a.png') !== false);
+$ramp_swapped = $ramp_tree;
+$set_picture($ramp_swapped, 'http://localhost/wp-content/uploads/ramp-b.png');
+update_post_meta($post, '_elementor_data', wp_slash(wp_json_encode($ramp_swapped)));
+call_user_func($el_sync, $stub, ['elements' => $ramp_swapped]);
+$check('the picture of a ramp changed in Elementor reaches gradientImage, not backgroundImage', ($picture_section()['style']['gradientImage']['url'] ?? '') === 'http://localhost/wp-content/uploads/ramp-b.png' && empty($picture_section()['style']['backgroundImage']) && count($picture_section()['style']['gradient']['stops'] ?? []) === 4);
+
 $call('PUT', $route, ['schema' => $schema, 'editorMode' => 'gutenberg']);
 $call('PUT', $route, ['schema' => $schema]);
 exit($failed ? 1 : 0);

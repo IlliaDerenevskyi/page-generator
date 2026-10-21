@@ -1256,7 +1256,8 @@ final class Page_Generator_Plugin {
         if (is_numeric($font) && $font > 0) {
             $out['typography_typography'] = 'custom';
             $out['typography_font_size'] = ['unit' => 'px', 'size' => max(10, absint($font)), 'sizes' => []];
-            $out['typography_line_height'] = ['unit' => 'em', 'size' => 1.2, 'sizes' => []];
+            $line = isset($style['lineHeight']) && is_numeric($style['lineHeight']) && $style['lineHeight'] > 0 && $style['lineHeight'] < 3 ? (float) $style['lineHeight'] : 1.2;
+            $out['typography_line_height'] = ['unit' => 'em', 'size' => $line, 'sizes' => []];
         }
         if (!empty($style['fontWeight'])) {
             $out['typography_typography'] = 'custom';

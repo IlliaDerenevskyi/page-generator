@@ -1,41 +1,41 @@
 {
   "azure-node-service.png": {
-    "visual": 92.33,
-    "perceptual": 97.67,
-    "content": 87.12,
-    "worstZone": 65,
+    "visual": 92.29,
+    "perceptual": 97.69,
+    "content": 87.95,
+    "worstZone": 67,
     "text": 100,
     "dom": 97.18
   },
   "github-repo.png": {
-    "visual": 94.27,
-    "perceptual": 98.34,
-    "content": 58.65,
-    "worstZone": 45,
+    "visual": 94.11,
+    "perceptual": 98.31,
+    "content": 60.84,
+    "worstZone": 27,
     "text": 100,
     "dom": 73.78
   },
   "lab6.png": {
-    "visual": 93.55,
-    "perceptual": 97.45,
-    "content": 74.7,
-    "worstZone": 11,
+    "visual": 93.72,
+    "perceptual": 97.62,
+    "content": 83.4,
+    "worstZone": 47,
     "text": 97.43,
     "dom": 83.8
   },
   "nodejs-org.png": {
-    "visual": 86.87,
-    "perceptual": 96.14,
-    "content": 64.67,
-    "worstZone": 26,
+    "visual": 86.64,
+    "perceptual": 96.09,
+    "content": 66.05,
+    "worstZone": 31,
     "text": 99.12,
     "dom": 86.75
   },
   "notion-login.png": {
-    "visual": 96.7,
-    "perceptual": 98.79,
-    "content": 40.43,
-    "worstZone": 21,
+    "visual": 96.62,
+    "perceptual": 98.8,
+    "content": 46.51,
+    "worstZone": 27,
     "text": 98.28,
     "dom": 86.49
   },
@@ -64,49 +64,49 @@
     "dom": 99.69
   },
   "gradients-css.png": {
-    "visual": 87.11,
-    "perceptual": 90.19,
-    "content": 79.27,
-    "worstZone": 56,
+    "visual": 87.22,
+    "perceptual": 90.3,
+    "content": 80.15,
+    "worstZone": 58,
     "text": 100,
     "dom": 69.7
   },
   "backdrops-css.png": {
-    "visual": 95.67,
-    "perceptual": 98.03,
-    "content": 93.18,
-    "worstZone": 81,
+    "visual": 95.85,
+    "perceptual": 98.16,
+    "content": 94.36,
+    "worstZone": 85,
     "text": 100,
     "dom": 70
   },
   "form-required.png": {
-    "visual": 98.34,
-    "perceptual": 99.4,
-    "content": 75.74,
-    "worstZone": 48,
+    "visual": 98.41,
+    "perceptual": 99.46,
+    "content": 86.15,
+    "worstZone": 70,
     "text": 86.67,
     "dom": 100
   },
   "fonts-css.png": {
-    "visual": 94.78,
-    "perceptual": 97.56,
-    "content": 41.64,
-    "worstZone": 15,
+    "visual": 94.84,
+    "perceptual": 97.7,
+    "content": 56.03,
+    "worstZone": 53,
     "text": 100,
     "dom": 88.89
   },
   "gradients-multi.png": {
-    "visual": 94.97,
-    "perceptual": 97.86,
-    "content": 91.27,
+    "visual": 95.06,
+    "perceptual": 97.91,
+    "content": 92.09,
     "worstZone": 88,
     "text": 100,
     "dom": 66.67
   },
   "mdn-flexbox.png": {
-    "visual": 86.26,
-    "perceptual": 94.86,
-    "content": 44.2,
+    "visual": 85.94,
+    "perceptual": 94.77,
+    "content": 48.62,
     "worstZone": 0,
     "text": 100,
     "dom": 90.96
