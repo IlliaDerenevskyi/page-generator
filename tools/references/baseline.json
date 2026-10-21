@@ -1,43 +1,43 @@
 {
   "azure-node-service.png": {
-    "visual": 92.29,
-    "perceptual": 97.69,
-    "content": 87.95,
+    "visual": 92.57,
+    "perceptual": 97.77,
+    "content": 89.04,
     "worstZone": 67,
     "text": 100,
-    "dom": 97.18
+    "dom": 95.06
   },
   "github-repo.png": {
-    "visual": 94.11,
-    "perceptual": 98.31,
-    "content": 60.84,
+    "visual": 94.31,
+    "perceptual": 98.39,
+    "content": 63.38,
     "worstZone": 27,
     "text": 100,
-    "dom": 73.78
+    "dom": 77.01
   },
   "lab6.png": {
-    "visual": 93.72,
-    "perceptual": 97.62,
-    "content": 83.4,
+    "visual": 93.74,
+    "perceptual": 97.65,
+    "content": 83.89,
     "worstZone": 47,
-    "text": 97.43,
-    "dom": 83.8
+    "text": 97.41,
+    "dom": 83.92
   },
   "nodejs-org.png": {
-    "visual": 86.64,
-    "perceptual": 96.09,
-    "content": 66.05,
+    "visual": 86.67,
+    "perceptual": 96.13,
+    "content": 66.45,
     "worstZone": 31,
     "text": 99.12,
     "dom": 86.75
   },
   "notion-login.png": {
-    "visual": 96.62,
-    "perceptual": 98.8,
-    "content": 46.51,
-    "worstZone": 27,
+    "visual": 96.66,
+    "perceptual": 98.85,
+    "content": 48.74,
+    "worstZone": 31,
     "text": 98.28,
-    "dom": 86.49
+    "dom": 86.84
   },
   "apple-ua.png": {
     "visual": 84.35,
@@ -66,15 +66,15 @@
   "gradients-css.png": {
     "visual": 87.22,
     "perceptual": 90.3,
-    "content": 80.15,
+    "content": 80.23,
     "worstZone": 58,
     "text": 100,
     "dom": 69.7
   },
   "backdrops-css.png": {
-    "visual": 95.85,
-    "perceptual": 98.16,
-    "content": 94.36,
+    "visual": 95.84,
+    "perceptual": 98.17,
+    "content": 94.38,
     "worstZone": 85,
     "text": 100,
     "dom": 70
@@ -82,15 +82,15 @@
   "form-required.png": {
     "visual": 98.41,
     "perceptual": 99.46,
-    "content": 86.15,
+    "content": 86.05,
     "worstZone": 70,
     "text": 86.67,
     "dom": 100
   },
   "fonts-css.png": {
-    "visual": 94.84,
-    "perceptual": 97.7,
-    "content": 56.03,
+    "visual": 94.86,
+    "perceptual": 97.73,
+    "content": 56.43,
     "worstZone": 53,
     "text": 100,
     "dom": 88.89
@@ -104,11 +104,11 @@
     "dom": 66.67
   },
   "mdn-flexbox.png": {
-    "visual": 85.94,
-    "perceptual": 94.77,
-    "content": 48.62,
+    "visual": 86.06,
+    "perceptual": 94.86,
+    "content": 50.59,
     "worstZone": 0,
     "text": 100,
-    "dom": 90.96
+    "dom": 90.48
   }
 }

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, isMonospaceLine, inkFontSize, baselineLineHeight, scoreFontWidths, chooseFont } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, fixAiWord, isMonospaceLine, inkFontSize, baselineLineHeight, scoreFontWidths, chooseFont } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -273,6 +273,17 @@ test('findIcons drops a single junk character on a picture but keeps short real 
     assert.equal(found.icons.length, 1);
     assert.equal(found.icons[0].x, 50);
     assert.deepEqual(found.droppedWords, [junk]);
+});
+
+test('findIcons drops a short low-confidence word on a picture but keeps a confidently read one', () => {
+    const { width, height, data, ring } = iconPage();
+    ring(50, 50, 18, [30, 30, 30]);
+    ring(200, 50, 18, [30, 30, 30]);
+    const junk = { text: 'шк', x: 50, y: 50, width: 18, height: 18, confidence: 44 };
+    const real = { text: 'in', x: 200, y: 50, width: 18, height: 18, confidence: 96 };
+    const found = findIcons(data, width, height, [junk, real]);
+    assert.deepEqual(found.droppedWords, [junk]);
+    assert.equal(found.icons.length, 1);
 });
 
 test('isColourful needs saturation over much of the area, so anti-aliasing fringes on text do not count', () => {
@@ -570,4 +581,13 @@ test('chooseFont picks the font whose letter proportions explain the word widths
     // the size read from the height disagrees with the fitted one: the score grows
     const lines = makeLines(wide, 20);
     assert.ok(scoreFontWidths(lines.map((l) => ({ ...l, size: 40 })), measureFor('wide')) > scoreFontWidths(lines, measureFor('wide')));
+});
+
+test('fixAiWord reads "Al" as "AI" except in a name', () => {
+    assert.strictEqual(fixAiWord('Build with Al today'), 'Build with AI today');
+    assert.strictEqual(fixAiWord('Al-powered search'), 'AI-powered search');
+    assert.strictEqual(fixAiWord('The future of Al'), 'The future of AI');
+    assert.strictEqual(fixAiWord('WHAT IS Al'), 'WHAT IS AI');
+    assert.strictEqual(fixAiWord('Al Gore spoke'), 'Al Gore spoke');
+    assert.strictEqual(fixAiWord('Algebra and Alice'), 'Algebra and Alice');
 });

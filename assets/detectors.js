@@ -487,6 +487,7 @@
     // Icons that are not text. Only words longer than three characters protect their pixels; short ones are judged per picture. OCR reads pictures as junk
     // "words" ("[", "@", a lone "G"): one character lying on a picture, or up to three characters lying on a multi-colour logo, is dropped and the picture kept.
     // A short word that is real text ("in", "to", "US") owns its glyphs, so that cluster is not an icon.
+    var ICON_JUNK_CONFIDENCE = 60;
     function findIcons(data, width, height, words) {
         var overlap = function (inner, outer) {
             var w = Math.min(inner.x + inner.width, outer.x + outer.width) - Math.max(inner.x, outer.x);
@@ -503,7 +504,9 @@
                 return sameLine && gap <= Math.max(word.height, 14) * 1.5;
             });
         };
+        // The real short words beside a picture ("до", "Всі", "in") are read with 90+ confidence; the glyphs of a picture come out at 25-55.
         var isLoneJunk = function (word) {
+            if (length(word) <= 3 && typeof word.confidence === 'number' && word.confidence < ICON_JUNK_CONFIDENCE) return true;
             if (length(word) > 1) return false;
             return !/[\p{L}\p{N}]/u.test(String(word.text || '')) || !inline(word);
         };
@@ -1035,6 +1038,20 @@
             }
             if (!/[A-Za-z]/.test(word) || !/[А-Яа-яІіЇїЄєҐґ]/.test(word)) return word;
             return word.replace(/[A-Za-z]/g, function (letter) { return LATIN_TWINS[letter] || letter; });
+        }).join(' ');
+    }
+
+    // The capital I of "AI" and the small l of "Al" look the same in most sans faces, and the OCR picks the name. "Al" is taken for "AI" unless it
+    // is followed by a capitalised word that is not itself in capitals ("Al Gore"); the line "WHAT IS Al" is told by its capitals.
+    function fixAiWord(text) {
+        var words = String(text).split(' ');
+        var upper = /[A-Z]{2,}/.test(text.replace(/\bAl\b/g, ''));
+        return words.map(function (word, index) {
+            var match = /^([("'\u201c]*)Al([)"'\u201d.,:;!?]*|-[A-Za-z]+[.,:;!?]*|\u2019s[.,:;!?]*)$/.exec(word);
+            if (!match) return word;
+            var next = words[index + 1] || '';
+            if (/^[A-Z][a-z]/.test(next) && !upper) return word;
+            return match[1] + 'AI' + match[2];
         }).join(' ');
     }
 
@@ -1665,6 +1682,7 @@
         scriptEvidence: scriptEvidence,
         needsLatinReread: needsLatinReread,
         unmixScripts: unmixScripts,
+        fixAiWord: fixAiWord,
         detectLinearGradient: detectLinearGradient,
         gradientGrid: gradientGrid,
         mergeWordPasses: mergeWordPasses

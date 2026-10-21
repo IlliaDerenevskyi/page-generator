@@ -96,6 +96,7 @@ grid cell) and `dom` (a node count that grows when a new element is found) are p
 | | `django` | landing with a green header and side columns |
 | | `python-docs` | documentation with tinted callouts |
 | | `rozetka` | online-store catalogue: banner carousel, product-card grid with price and badges, left menu, lazy-loading image placeholders (captured 2026-10-21 at 2x, reduced to 1x and cut to 4000 px) |
+| | `www.foxtrot.com.ua_` | Ukrainian electronics store: promo banner, left category menu with icons, banner carousel, brand-logo grid, long SEO text, dark footer with link columns (captured 2026-10-22, never tuned on) |
 | `mobile/` | `lab6-mobile-390` | the same page at 390 px, for the mobile layout (not run by `benchmark.js`) |
 
 Heavy files are cut to 5000 px and hold-out pages to 4000 px, so a run stays within the plugin's limits (height 10000 px, 40 megapixels).

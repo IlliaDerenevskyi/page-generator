@@ -1866,7 +1866,7 @@
             analysis.medianLine = lineHeights.length ? lineHeights[Math.floor(lineHeights.length / 2)] : 16;
             var fontLines = [];
             var textElements = groups.map(function (line) {
-                var text = normalizeOcrText(window.PageGeneratorDetectors.unmixScripts(line.words.map(function (word) { return word.text; }).join(' ')));
+                var text = normalizeOcrText(window.PageGeneratorDetectors.fixAiWord(window.PageGeneratorDetectors.unmixScripts(line.words.map(function (word) { return word.text; }).join(' '))));
                 if (!isUsableOcrText(text, line.words)) return null;
                 var node = {
                     id: randomId(),

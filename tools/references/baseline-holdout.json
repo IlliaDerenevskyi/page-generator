@@ -2,18 +2,18 @@
   "bootstrap.png": {
     "visual": 72.99,
     "perceptual": 94.6,
-    "content": 64.69,
+    "content": 64.64,
     "worstZone": 33,
     "text": 99.44,
     "dom": 89.66
   },
   "diia.png": {
     "visual": 86.61,
-    "perceptual": 95.24,
-    "content": 79.39,
+    "perceptual": 95.25,
+    "content": 79.44,
     "worstZone": 25,
     "text": 100,
-    "dom": 89.76
+    "dom": 89.82
   },
   "django.png": {
     "visual": 88.15,
@@ -24,51 +24,59 @@
     "dom": 90.84
   },
   "hacker-news.png": {
-    "visual": 66.07,
+    "visual": 66.08,
     "perceptual": 96.42,
-    "content": 83.88,
-    "worstZone": 14,
+    "content": 83.86,
+    "worstZone": 25,
     "text": 100,
     "dom": 70.71
   },
   "python-docs.png": {
     "visual": 85.86,
     "perceptual": 97.39,
-    "content": 58.08,
+    "content": 58.09,
     "worstZone": 7,
     "text": 100,
-    "dom": 96.48
+    "dom": 96.51
   },
   "python-org.png": {
     "visual": 80.02,
     "perceptual": 94.26,
-    "content": 74.85,
+    "content": 74.86,
     "worstZone": 26,
     "text": 100,
     "dom": 93.18
   },
   "ukr-net.png": {
-    "visual": 63.85,
-    "perceptual": 85.63,
-    "content": 43.37,
+    "visual": 63.87,
+    "perceptual": 85.65,
+    "content": 43.64,
     "worstZone": 0,
-    "text": 99.8,
-    "dom": 93.81
+    "text": 99.87,
+    "dom": 92.86
   },
   "vuejs.png": {
     "visual": 92.02,
     "perceptual": 96.62,
-    "content": 31.42,
+    "content": 31.41,
     "worstZone": 0,
-    "text": 96.46,
-    "dom": 76.88
+    "text": 96.45,
+    "dom": 77.3
   },
   "rozetka.png": {
-    "visual": 87.31,
-    "perceptual": 96.49,
-    "content": 71.59,
-    "worstZone": 51,
-    "text": 99.6,
-    "dom": 95.28
+    "visual": 87.26,
+    "perceptual": 96.42,
+    "content": 71.36,
+    "worstZone": 38,
+    "text": 99.59,
+    "dom": 94.93
+  },
+  "www.foxtrot.com.ua_.png": {
+    "visual": 72.31,
+    "perceptual": 94.6,
+    "content": 85.88,
+    "worstZone": 69,
+    "text": 100,
+    "dom": 90.87
   }
 }
