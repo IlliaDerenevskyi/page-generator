@@ -271,6 +271,7 @@ final class Page_Generator_Plugin {
         if ($has_elementor_canvas) {
             // Elementor lays the canvas out in px, so it needs the shared canvas rules and the zoom-to-fit script.
             wp_enqueue_style('page-generator-canvas', plugins_url('assets/canvas.css', __FILE__), [], $this->asset_version('assets/canvas.css'));
+            $this->enqueue_font_styles();
             wp_enqueue_script('page-generator-canvas-scale', plugins_url('assets/canvas-scale.js', __FILE__), [], $this->asset_version('assets/canvas-scale.js'), true);
             wp_enqueue_script('page-generator-text-fit', plugins_url('assets/text-fit.js', __FILE__), ['page-generator-canvas-scale'], $this->asset_version('assets/text-fit.js'), true);
             wp_localize_script('page-generator-canvas-scale', 'PageGeneratorScale', ['maxWidth' => absint($this->settings()['default_container_width'])]);
@@ -280,6 +281,8 @@ final class Page_Generator_Plugin {
     private function enqueue_generator_assets($handle, $block_editor = false) {
         $settings = $this->settings();
         wp_enqueue_style($handle, plugins_url('assets/editor.css', __FILE__), [], $this->asset_version('assets/editor.css'));
+        // The editor measures text in these faces to recognise the one a screenshot uses.
+        $this->enqueue_font_styles();
         $dependencies = $block_editor ? ['jquery', 'wp-blocks', 'wp-element', 'wp-block-editor'] : ['jquery'];
         wp_enqueue_script('page-generator-detectors', plugins_url('assets/detectors.js', __FILE__), [], $this->asset_version('assets/detectors.js'), true);
         $dependencies[] = 'page-generator-detectors';
@@ -297,6 +300,7 @@ final class Page_Generator_Plugin {
             'canManageSettings' => current_user_can('manage_options'),
             'canUploadFiles' => current_user_can('upload_files'),
             'registerBlocks' => $block_editor,
+            'fonts' => array_values(array_map(function ($font) { return ['slug' => $font['slug'], 'name' => $font['name'], 'kind' => $font['kind'] ?? 'sans']; }, $this->font_registry())),
         ]);
     }
 
@@ -1285,7 +1289,7 @@ final class Page_Generator_Plugin {
         $common = [
             '_margin' => $this->elementor_box_values(0),
             '_padding' => $this->elementor_box_values(0),
-            '_css_classes' => 'pg-el-text' . ($nowrap ? ' pg-nowrap' : '') . ($type === 'link' ? ' pg-link' : ''),
+            '_css_classes' => 'pg-el-text' . ($nowrap ? ' pg-nowrap' : '') . ($type === 'link' ? ' pg-link' : '') . ($this->font_slug($style) !== '' ? ' pg-font-' . $this->font_slug($style) : ''),
         ] + $this->elementor_typography($style, $settings);
         $mono = ($style['fontFamily'] ?? '') === 'mono';
         if ($type === 'heading') {
@@ -1722,7 +1726,33 @@ final class Page_Generator_Plugin {
         return $url ? ['url' => $url, 'id' => absint($image['attachmentId'] ?? 0)] : null;
     }
 
+    // The recognisable web fonts shipped with the plugin (assets/fonts/fonts.json, written by tools/fetch-fonts.js): slug => [slug, name, kind, stack].
+    private function font_registry() {
+        static $registry = null;
+        if ($registry === null) {
+            $registry = [];
+            $path = __DIR__ . '/assets/fonts/fonts.json';
+            $list = is_readable($path) ? json_decode((string) file_get_contents($path), true) : [];
+            foreach ((array) $list as $font) {
+                if (is_array($font) && !empty($font['slug']) && preg_match('/^[a-z0-9-]+$/', $font['slug']) && !empty($font['stack'])) $registry[$font['slug']] = $font;
+            }
+        }
+        return $registry;
+    }
+
+    // The slug of a shipped font named by the node's style.fontFamily, or '' (serif, mono and the default sans are not in the registry).
+    private function font_slug($style) {
+        $family = is_array($style) ? ($style['fontFamily'] ?? '') : '';
+        return is_string($family) && isset($this->font_registry()[$family]) ? $family : '';
+    }
+
+    private function enqueue_font_styles() {
+        wp_enqueue_style('page-generator-fonts', plugins_url('assets/fonts.css', __FILE__), [], $this->asset_version('assets/fonts.css'));
+    }
+
     private function font_family_css($style) {
+        $slug = $this->font_slug($style);
+        if ($slug !== '') return 'font-family:' . $this->font_registry()[$slug]['stack'] . ';';
         $family = $style['fontFamily'] ?? '';
         if ($family === 'mono') return "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;";
         return $family === 'serif' ? "font-family:Georgia,'Times New Roman',serif;" : '';

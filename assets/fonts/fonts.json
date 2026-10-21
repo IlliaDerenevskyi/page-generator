@@ -1,0 +1,74 @@
+[
+  {
+    "slug": "inter",
+    "name": "Inter",
+    "kind": "sans",
+    "stack": "'Inter',Arial,Helvetica,sans-serif"
+  },
+  {
+    "slug": "roboto",
+    "name": "Roboto",
+    "kind": "sans",
+    "stack": "'Roboto',Arial,Helvetica,sans-serif"
+  },
+  {
+    "slug": "open-sans",
+    "name": "Open Sans",
+    "kind": "sans",
+    "stack": "'Open Sans',Arial,Helvetica,sans-serif"
+  },
+  {
+    "slug": "noto-sans",
+    "name": "Noto Sans",
+    "kind": "sans",
+    "stack": "'Noto Sans',Arial,Helvetica,sans-serif"
+  },
+  {
+    "slug": "montserrat",
+    "name": "Montserrat",
+    "kind": "sans",
+    "stack": "'Montserrat',Arial,Helvetica,sans-serif"
+  },
+  {
+    "slug": "source-sans-3",
+    "name": "Source Sans 3",
+    "kind": "sans",
+    "stack": "'Source Sans 3',Arial,Helvetica,sans-serif"
+  },
+  {
+    "slug": "pt-sans",
+    "name": "PT Sans",
+    "kind": "sans",
+    "stack": "'PT Sans',Arial,Helvetica,sans-serif"
+  },
+  {
+    "slug": "rubik",
+    "name": "Rubik",
+    "kind": "sans",
+    "stack": "'Rubik',Arial,Helvetica,sans-serif"
+  },
+  {
+    "slug": "merriweather",
+    "name": "Merriweather",
+    "kind": "serif",
+    "stack": "'Merriweather',Georgia,'Times New Roman',serif"
+  },
+  {
+    "slug": "pt-serif",
+    "name": "PT Serif",
+    "kind": "serif",
+    "stack": "'PT Serif',Georgia,'Times New Roman',serif"
+  },
+  {
+    "slug": "playfair-display",
+    "name": "Playfair Display",
+    "kind": "serif",
+    "stack": "'Playfair Display',Georgia,'Times New Roman',serif"
+  },
+  {
+    "slug": "noto-serif",
+    "name": "Noto Serif",
+    "kind": "serif",
+    "stack": "'Noto Serif',Georgia,'Times New Roman',serif"
+  }
+]

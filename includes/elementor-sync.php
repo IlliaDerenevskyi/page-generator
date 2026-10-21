@@ -248,6 +248,8 @@ trait Page_Generator_Elementor_Sync {
                 }
             }
             if (!empty($settings['typography_font_weight']) && is_numeric($settings['typography_font_weight'])) $set('fontWeight', (int) $settings['typography_font_weight']);
+            // A recognised web font travels as a class (pg-font-<slug>) on the widget.
+            if (preg_match('/(?:^|\s)pg-font-([a-z0-9-]+)(?:\s|$)/', (string) ($settings['_css_classes'] ?? ''), $font_match) && isset($this->font_registry()[$font_match[1]])) $set('fontFamily', $font_match[1]);
             $color = $this->native_color($settings[$widget === 'heading' ? 'title_color' : ($widget === 'button' ? 'button_text_color' : 'text_color')] ?? '');
             if ($color !== '') $set('color', $color);
             if ($widget === 'button') {

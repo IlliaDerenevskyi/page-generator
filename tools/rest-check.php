@@ -396,6 +396,23 @@ $call('PUT', $route, ['schema' => $call('GET', $route)->get_data()['schema'], 'l
 $check('a rebuilt Elementor flow page keeps the edited margin', strpos(get_post_meta($post, '_elementor_data', true), '"top":"61"') !== false);
 $call('PUT', $route, ['schema' => $sync_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
 
+// Font family names: style.fontFamily holds a slug of a shipped web font; both exporters write its class, the bridges read it back.
+$font_schema = $flow_schema;
+$set_font = function (&$nodes) use (&$set_font) {
+    foreach ($nodes as &$n) {
+        if (($n['id'] ?? '') === 't1') $n['style']['fontFamily'] = 'roboto';
+        foreach (['children', 'elements'] as $key) if (!empty($n[$key])) $set_font($n[$key]);
+    }
+    unset($n);
+};
+$set_font($font_schema['sections']);
+$call('PUT', $route, ['schema' => $font_schema, 'layout' => 'pixel', 'editorMode' => 'gutenberg']);
+$check('a font slug becomes the class of the block', strpos(get_post($post)->post_content, 'pg-font-roboto') !== false);
+$check('the font survives the Gutenberg bridge', ($flow_node('t1')['style']['fontFamily'] ?? '') === 'roboto');
+$call('PUT', $route, ['schema' => $font_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$check('a font slug becomes a CSS class of the Elementor widget', strpos(get_post_meta($post, '_elementor_data', true), 'pg-font-roboto') !== false);
+$check('the registered fonts have a stylesheet', is_file(dirname(__DIR__) . '/assets/fonts.css') && strpos(file_get_contents(dirname(__DIR__) . '/assets/fonts.css'), '.pg-font-roboto') !== false);
+
 $call('PUT', $route, ['schema' => $schema, 'editorMode' => 'gutenberg']);
 $call('PUT', $route, ['schema' => $schema]);
 exit($failed ? 1 : 0);

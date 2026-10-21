@@ -758,6 +758,8 @@
                 return analyzeScreenshot(item.file, item.data);
             }));
         }).then(function (analyses) {
+            return loadCandidateFonts().then(function () { return analyses; });
+        }).then(function (analyses) {
             var split = splitByBreakpoint(analyses, uploaded);
             var schema = buildScreenshotPageSchema(split.desktop, $('#pg-source-description').val());
             if (split.mobile.length) {
@@ -1747,6 +1749,88 @@
         return Math.sqrt(variance / samples.length);
     }
 
+    // ---- Font families -------------------------------------------------------------------------------------------------------
+
+    var fontCanvas = null;
+    var fontsReady = null;
+
+    // The web fonts the plugin ships (PageGeneratorConfig.fonts, files in assets/fonts) are loaded so that text can be measured in them.
+    function loadCandidateFonts() {
+        if (fontsReady) return fontsReady;
+        var fonts = PageGeneratorConfig.fonts || [];
+        if (!fonts.length || !document.fonts || !document.fonts.load) {
+            fontsReady = Promise.resolve();
+            return fontsReady;
+        }
+        var loads = [];
+        fonts.forEach(function (font) {
+            [400, 700].forEach(function (weight) { loads.push(document.fonts.load(weight + ' 16px "' + font.name + '"', 'AaБб').catch(function () { return null; })); });
+        });
+        fontsReady = Promise.all(loads).then(function () { return null; });
+        return fontsReady;
+    }
+
+    function fontMeasure(family) {
+        fontCanvas = fontCanvas || document.createElement('canvas').getContext('2d');
+        return function (text, weight) {
+            fontCanvas.font = (weight >= 600 ? '700' : '400') + ' 100px ' + family;
+            return fontCanvas.measureText(text).width;
+        };
+    }
+
+    // Each line is first told apart as sans, serif or mono by its glyphs (see detectLineTypeface). Within such a class the font is then
+    // read from the widths of the words: lines of one class and one role (headings, body text) share a font, chosen by vote of all their
+    // words. The font shipped with the plugin whose proportions explain the widths best wins over the plain default only when it is clearly
+    // better; a line without enough evidence takes the winner of its class's body text.
+    function assignFontFamilies(entries) {
+        var fonts = PageGeneratorConfig.fonts || [];
+        if (!fonts.length || !entries.length) return;
+        var tools = window.PageGeneratorDetectors;
+        var sizes = entries.map(function (entry) { return entry.node.style.fontSize; }).sort(function (a, b) { return a - b; });
+        var median = sizes[Math.floor(sizes.length / 2)] || 16;
+        var defaults = { sans: 'Arial', serif: 'Georgia', mono: 'monospace' };
+        // Telling serif from sans line by line is noisy; a page that is serif (or sans) in nearly all its text is that throughout.
+        var serifChars = 0, sansChars = 0;
+        entries.forEach(function (entry) {
+            var generic = entry.node.style.fontFamily;
+            var chars = String(entry.node.text || entry.node.content || '').length;
+            if (generic === 'serif') serifChars += chars; else if (generic !== 'mono') sansChars += chars;
+        });
+        var serifShare = serifChars / Math.max(1, serifChars + sansChars);
+        entries.forEach(function (entry) {
+            if (entry.node.style.fontFamily === 'mono') return;
+            if (serifShare >= .75) entry.node.style.fontFamily = 'serif';
+            else if (serifShare <= .25) delete entry.node.style.fontFamily;
+        });
+        var groups = {};
+        entries.forEach(function (entry) {
+            var generic = entry.node.style.fontFamily;
+            var kind = generic === 'serif' ? 'serif' : (generic === 'mono' ? 'mono' : 'sans');
+            var role = entry.node.style.fontSize >= median * 1.3 ? 'heading' : 'body';
+            entry.kind = kind;
+            entry.key = kind + ':' + role;
+            (groups[entry.key] = groups[entry.key] || []).push(entry);
+        });
+        var winners = {};
+        Object.keys(groups).forEach(function (key) {
+            var kind = key.split(':')[0];
+            var candidates = fonts.filter(function (font) { return font.kind === kind; }).map(function (font) { return font.slug; });
+            var names = { Arial: 'Arial', Georgia: 'Georgia', monospace: 'monospace' };
+            fonts.forEach(function (font) { names[font.slug] = '"' + font.name + '"'; });
+            var scored = groups[key].map(function (entry) {
+                return { size: tools.inkFontSize(entry.line.height, entry.node.text || entry.node.content || ''), weight: Number(entry.node.style.fontWeight) >= 600 ? 700 : 400, words: entry.line.words.map(function (word) { return { text: word.text, width: word.width }; }) };
+            });
+            winners[key] = tools.chooseFont(scored, candidates, defaults[kind], function (id) {
+                return fontMeasure(names[id] + ',' + (kind === 'serif' ? 'serif' : (kind === 'mono' ? 'monospace' : 'sans-serif')));
+            }, .6);
+        });
+        entries.forEach(function (entry) {
+            var winner = winners[entry.key];
+            if (winner === defaults[entry.kind] && entry.key.indexOf(':heading') !== -1) winner = winners[entry.kind + ':body'];
+            if (winner && winner !== defaults[entry.kind]) entry.node.style.fontFamily = winner;
+        });
+    }
+
     // The font size from the height of a line's ink. The ink spans from the top of the tallest letter to the bottom of the lowest one, and
     // both depend on the text: capitals, digits and ascenders (b d f h k l t) reach about .73 of the size above the baseline, a line of
     // small round letters only .53; descenders (g j p q y , ;) reach .21 below it. Reading every line as .9 of its height made text 10-25% small.
@@ -1780,6 +1864,7 @@
             var groups = groupWordsIntoLines(analysis.words);
             var lineHeights = groups.map(function (line) { return line.height; }).sort(function (a, b) { return a - b; });
             analysis.medianLine = lineHeights.length ? lineHeights[Math.floor(lineHeights.length / 2)] : 16;
+            var fontLines = [];
             var textElements = groups.map(function (line) {
                 var text = normalizeOcrText(window.PageGeneratorDetectors.unmixScripts(line.words.map(function (word) { return word.text; }).join(' ')));
                 if (!isUsableOcrText(text, line.words)) return null;
@@ -1807,8 +1892,10 @@
                 if (window.PageGeneratorDetectors.isMonospaceLine(line.words)) node.style.fontFamily = 'mono';
                 else if (typeface && typeface.serif) node.style.fontFamily = 'serif';
                 node = classifyTextNode(node, analysis);
+                if (node) fontLines.push({ node: node, line: line });
                 return node;
             }).filter(function (node) { return node !== null; });
+            assignFontFamilies(fontLines);
             markMenuRuns(textElements, analysis);
             var semantic = analyzeLayout(analysis, textElements);
             semantic.elements = buildRecursiveTree(semantic.elements, analysis);

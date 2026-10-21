@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, isMonospaceLine, inkFontSize, baselineLineHeight } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, isMonospaceLine, inkFontSize, baselineLineHeight, scoreFontWidths, chooseFont } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -552,4 +552,22 @@ test('the font size follows the ink height of the text, and the line height keep
     // that line box places the baseline of Arial (ascent .905, descent .212) where the screenshot has it
     const baseline = (lineHeight * 21 - 1.117 * 21) / 2 + .905 * 21;
     assert.ok(Math.abs(baseline - .73 * 20 / .94) < .05);
+});
+
+test('chooseFont picks the font whose letter proportions explain the word widths, and keeps the default when none does', () => {
+    // two toy fonts: "narrow" has uniform letters, "wide" has wide m and w and narrow i and l
+    const narrow = (text) => [...text].length * 50;
+    const wide = (text) => [...text].reduce((sum, c) => sum + ('mw'.includes(c) ? 90 : 'il'.includes(c) ? 25 : 55), 0);
+    const measureFor = (id) => (text) => (id === 'wide' ? wide(text) : narrow(text));
+    const sentence = ['willing', 'mimic', 'little', 'swim', 'millimeter', 'wallow', 'whim', 'mill', 'lime', 'wiggle'];
+    const makeLines = (measure, size) => [0, 2, 4, 6].map((from) => ({ size, weight: 400, words: sentence.slice(from, from + 4).map((text) => ({ text, width: measure(text) * size / 100 })) }));
+    // the screenshot was set in "wide"
+    assert.strictEqual(chooseFont(makeLines(wide, 20), ['narrow', 'wide'], 'narrow', measureFor), 'wide');
+    // the screenshot was set in the default: nothing beats it
+    assert.strictEqual(chooseFont(makeLines(narrow, 20), ['narrow', 'wide'], 'narrow', measureFor), 'narrow');
+    // too little text to say anything
+    assert.strictEqual(chooseFont(makeLines(wide, 20).slice(0, 1).map((l) => ({ ...l, words: l.words.slice(0, 2) })), ['narrow', 'wide'], 'narrow', measureFor), 'narrow');
+    // the size read from the height disagrees with the fitted one: the score grows
+    const lines = makeLines(wide, 20);
+    assert.ok(scoreFontWidths(lines.map((l) => ({ ...l, size: 40 })), measureFor('wide')) > scoreFontWidths(lines, measureFor('wide')));
 });

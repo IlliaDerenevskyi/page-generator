@@ -1,0 +1,21 @@
+The fonts in this folder (Inter, Roboto, Open Sans, Noto Sans, Noto Serif, Montserrat, Source Sans 3, PT Sans, PT Serif,
+Rubik, Merriweather, Playfair Display) are downloaded from Google Fonts by tools/fetch-fonts.js. Each family is licensed under
+the SIL Open Font License, Version 1.1 (Roboto, Noto and Open Sans families: the same OFL / Apache terms as published by
+Google Fonts). Copyright remains with the respective authors listed for each family at https://fonts.google.com/ .
+
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+Full text: https://openfontlicense.org/open-font-license-official-text/
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining a copy of the Font Software, to use, study, copy, merge,
+embed, modify, redistribute, and sell modified and unmodified copies of the Font Software, subject to the following conditions:
+1) Neither the Font Software nor any of its individual components, in Original or Modified Versions, may be sold by itself.
+2) Original or Modified Versions of the Font Software may be bundled, redistributed and/or sold with any software, provided that
+   each copy contains the above copyright notice and this license.
+3) No Modified Version of the Font Software may use the Reserved Font Name(s) unless explicit written permission is granted.
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font Software shall not be used to promote, endorse or advertise
+   any Modified Version, except to acknowledge the contribution(s) of the Copyright Holder(s) and the Author(s) or with their
+   explicit written permission.
+5) The Font Software, modified or unmodified, in part or in whole, must be distributed entirely under this license.
+
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. See the official text above for the full disclaimer.

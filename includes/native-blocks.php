@@ -36,6 +36,7 @@ trait Page_Generator_Native_Blocks {
             }
         }
         wp_enqueue_style('page-generator-canvas', plugins_url('assets/canvas.css', dirname(__DIR__) . '/page-generator.php'), [], $this->asset_version('assets/canvas.css'));
+        $this->enqueue_font_styles();
         if (!is_admin()) {
             wp_enqueue_script('page-generator-text-fit', plugins_url('assets/text-fit.js', dirname(__DIR__) . '/page-generator.php'), [], $this->asset_version('assets/text-fit.js'), true);
         }
@@ -266,7 +267,8 @@ trait Page_Generator_Native_Blocks {
         $label = (string) ($node['text'] ?? ($node['content'] ?? ''));
         $style = $this->native_style($node, true, $background);
         // The face is a class (not inline CSS) so the block still validates against its saved markup.
-        if (($node['style']['fontFamily'] ?? '') === 'serif') $custom_class = trim($custom_class . ' pg-serif');
+        if ($this->font_slug($node['style'] ?? []) !== '') $custom_class = trim($custom_class . ' pg-font-' . $this->font_slug($node['style']));
+        elseif (($node['style']['fontFamily'] ?? '') === 'serif') $custom_class = trim($custom_class . ' pg-serif');
         elseif (($node['style']['fontFamily'] ?? '') === 'mono') $custom_class = trim($custom_class . ' pg-mono');
         $attrs = $this->native_id($node);
         if ($box = $this->native_box($node, $origin)) $attrs['pgBox'] = $box;

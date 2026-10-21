@@ -1,72 +1,72 @@
 {
   "bootstrap.png": {
-    "visual": 72.43,
-    "perceptual": 94.09,
-    "content": 62.94,
+    "visual": 72.99,
+    "perceptual": 94.6,
+    "content": 64.69,
     "worstZone": 33,
     "text": 99.44,
     "dom": 89.66
   },
   "diia.png": {
-    "visual": 86.59,
-    "perceptual": 95.21,
-    "content": 78.87,
-    "worstZone": 23,
+    "visual": 86.61,
+    "perceptual": 95.24,
+    "content": 79.39,
+    "worstZone": 25,
     "text": 100,
     "dom": 89.76
   },
   "django.png": {
-    "visual": 88.14,
-    "perceptual": 97.21,
-    "content": 67.67,
+    "visual": 88.15,
+    "perceptual": 97.22,
+    "content": 68.06,
     "worstZone": 2,
     "text": 100,
     "dom": 90.84
   },
   "hacker-news.png": {
-    "visual": 66.2,
-    "perceptual": 96.45,
-    "content": 83.46,
+    "visual": 66.07,
+    "perceptual": 96.42,
+    "content": 83.88,
     "worstZone": 14,
     "text": 100,
     "dom": 70.71
   },
   "python-docs.png": {
-    "visual": 85.85,
-    "perceptual": 97.37,
-    "content": 56.49,
+    "visual": 85.86,
+    "perceptual": 97.39,
+    "content": 58.08,
     "worstZone": 7,
     "text": 100,
     "dom": 96.48
   },
   "python-org.png": {
-    "visual": 80.03,
-    "perceptual": 94.27,
-    "content": 74.54,
+    "visual": 80.02,
+    "perceptual": 94.26,
+    "content": 74.85,
     "worstZone": 26,
     "text": 100,
     "dom": 93.18
   },
   "ukr-net.png": {
-    "visual": 63.82,
-    "perceptual": 85.61,
-    "content": 43.3,
+    "visual": 63.85,
+    "perceptual": 85.63,
+    "content": 43.37,
     "worstZone": 0,
     "text": 99.8,
     "dom": 93.81
   },
   "vuejs.png": {
-    "visual": 91.98,
-    "perceptual": 96.58,
-    "content": 29.42,
+    "visual": 92.02,
+    "perceptual": 96.62,
+    "content": 31.42,
     "worstZone": 0,
     "text": 96.46,
     "dom": 76.88
   },
   "rozetka.png": {
     "visual": 87.31,
-    "perceptual": 96.48,
-    "content": 70.79,
+    "perceptual": 96.49,
+    "content": 71.59,
     "worstZone": 51,
     "text": 99.6,
     "dom": 95.28

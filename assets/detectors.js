@@ -1058,6 +1058,72 @@
         return spread / mean <= 0.035 && mean / height >= 0.45 && mean / height <= 0.95;
     }
 
+    // How well a font explains the widths of the words on a set of text lines (lower is better). `measure(text, weight)` gives the width of
+    // a text in that font at a size of 100. Within a line the words' widths follow the letters, so the font's own proportions show: one
+    // scale (the size the font would need) is fitted by least squares, and the score is what stays unexplained (the pattern of the words)
+    // plus how far that size is from the one read from the line's height. Each line counts by its width.
+    function scoreFontWidths(lines, measure) {
+        var total = 0;
+        var weightSum = 0;
+        (lines || []).forEach(function (line) {
+            var actual = [];
+            var predicted = [];
+            (line.words || []).forEach(function (word) {
+                var text = String(word.text || '').replace(/[^\p{L}\p{N}]/gu, '');
+                if (text.length < 2 || !(word.width > 3)) return;
+                var width = measure(String(word.text), line.weight || 400);
+                if (width > 0) { actual.push(word.width); predicted.push(width); }
+            });
+            // Fitting a scale and an offset needs more than two words, or every font would fit perfectly.
+            if (actual.length < 4) return;
+            var n = actual.length;
+            var meanA = actual.reduce(function (a, b) { return a + b; }, 0) / n;
+            var meanP = predicted.reduce(function (a, b) { return a + b; }, 0) / n;
+            var covariance = 0, variance = 0, spread = 0;
+            for (var i = 0; i < n; i += 1) {
+                covariance += (actual[i] - meanA) * (predicted[i] - meanP);
+                variance += Math.pow(predicted[i] - meanP, 2);
+                spread += Math.pow(actual[i] - meanA, 2);
+            }
+            if (!variance || !spread) return;
+            // The offset absorbs what the boxes lack against the advance widths (the side bearings of the first and last letter).
+            var scale = covariance / variance;
+            if (!(scale > 0)) return;
+            var offset = meanA - scale * meanP;
+            var residual = 0;
+            for (var j = 0; j < n; j += 1) residual += Math.pow(actual[j] - (scale * predicted[j] + offset), 2);
+            var drift = line.size > 0 ? Math.log(scale * 100 / line.size) : 0;
+            var weight = meanA * n;
+            total += weight * (residual / spread + .5 * drift * drift);
+            weightSum += weight;
+        });
+        return weightSum ? total / weightSum : Infinity;
+    }
+
+    // The best of several candidate fonts for these lines, or the default when none clearly beats it. `candidates` are ids; `measureFor(id)`
+    // returns the measure function of a font. A candidate has to score at most `margin` of the default's score and the lines have to hold
+    // enough text to say anything.
+    var FONT_FIT_LIMIT = .006;
+
+    function chooseFont(lines, candidates, defaultId, measureFor, margin, report) {
+        var letters = (lines || []).reduce(function (sum, line) { return sum + (line.words || []).reduce(function (n, word) { return n + String(word.text || '').length; }, 0); }, 0);
+        var defaultScore = scoreFontWidths(lines, measureFor(defaultId));
+        var winner = null;
+        var winnerScore = Infinity;
+        var runnerScore = Infinity;
+        candidates.forEach(function (id) {
+            if (id === defaultId) return;
+            var score = scoreFontWidths(lines, measureFor(id));
+            if (score < winnerScore) { runnerScore = winnerScore; winner = id; winnerScore = score; }
+            else if (score < runnerScore) runnerScore = score;
+        });
+        if (report) report({ letters: letters, defaultScore: defaultScore, winner: winner, winnerScore: winnerScore, runnerScore: runnerScore });
+        if (letters < 60 || winner === null) return defaultId;
+        // A font is named only when it explains the widths well in itself (a page set in a font that is not among the candidates makes every
+        // candidate fit badly, and the least bad one would be picked) and is clearly better than the default.
+        return winnerScore <= FONT_FIT_LIMIT && winnerScore <= defaultScore * (margin || .6) ? winner : defaultId;
+    }
+
     // How far a line's letters reach above and below the baseline, in units of the font size, read from its text. Capitals, digits and the
     // ascenders (b d f h k l t) reach about .73 above it, a line of small round letters only .53; descenders (g j p q y , ;) reach .21 below.
     function inkProfile(text) {
@@ -1591,6 +1657,8 @@
         sharpen: sharpen,
         prepareForOcr: prepareForOcr,
         classifyTypeface: classifyTypeface,
+        scoreFontWidths: scoreFontWidths,
+        chooseFont: chooseFont,
         inkFontSize: inkFontSize,
         baselineLineHeight: baselineLineHeight,
         isMonospaceLine: isMonospaceLine,

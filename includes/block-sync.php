@@ -364,9 +364,11 @@ trait Page_Generator_Block_Sync {
         }
         $classes = ' ' . ($attrs['className'] ?? '') . ' ';
         if ($text) {
-            if (strpos($classes, ' pg-serif ') !== false) $set('fontFamily', 'serif');
+            $font_class = preg_match('/ pg-font-([a-z0-9-]+) /', $classes, $font_match) && isset($this->font_registry()[$font_match[1]]) ? $font_match[1] : '';
+            if ($font_class !== '') $set('fontFamily', $font_class);
+            elseif (strpos($classes, ' pg-serif ') !== false) $set('fontFamily', 'serif');
             elseif (strpos($classes, ' pg-mono ') !== false) $set('fontFamily', 'mono');
-            elseif (in_array($style['fontFamily'] ?? '', ['serif', 'mono'], true)) $set('fontFamily', null);
+            elseif (($style['fontFamily'] ?? '') !== '') $set('fontFamily', null);
         }
         if ($changed) $node['style'] = $style;
         return $changed;
