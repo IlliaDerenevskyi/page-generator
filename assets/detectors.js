@@ -526,6 +526,64 @@
         return { icons: icons, droppedWords: droppedWords };
     }
 
+    // A grid of equal plates that each hold one centred mark is a wall of brand logos ("Popular brands"). A wordmark in a display face is not text the page
+    // could set: OCR reads it in pieces ("PH LIPS", "L enovo") and the pieces become icons. The whole mark is cut out of its plate instead, ink box
+    // against the plate colour. Plates that hold lines of text, a photo or a drawing are not logo plates; at least four plates, 70% of them alike.
+    function detectLogoTiles(surfaces, words, icons, boxes, data, width, height) {
+        var tolerance = Math.max(3, Math.round(width * .002));
+        var groups = [];
+        (surfaces || []).forEach(function (surface) {
+            if (surface.kind !== 'surface' && surface.kind !== 'card') return;
+            if (surface.width < width * .05 || surface.width > width * .3 || surface.height < width * .02 || surface.height > width * .12) return;
+            var group = groups.find(function (candidate) {
+                return Math.abs(candidate.width - surface.width) <= tolerance && Math.abs(candidate.height - surface.height) <= tolerance;
+            });
+            if (group) group.members.push(surface);
+            else groups.push({ width: surface.width, height: surface.height, members: [surface] });
+        });
+        var inside = function (box, plate) {
+            var cx = box.x + box.width / 2;
+            var cy = box.y + box.height / 2;
+            return cx >= plate.x && cx <= plate.x + plate.width && cy >= plate.y && cy <= plate.y + plate.height;
+        };
+        var found = [];
+        groups.forEach(function (group) {
+            if (group.members.length < 4) return;
+            var plates = group.members.map(function (plate) {
+                var covered = (boxes || []).some(function (box) {
+                    var w = Math.min(plate.x + plate.width, box.x + box.width) - Math.max(plate.x, box.x);
+                    var h = Math.min(plate.y + plate.height, box.y + box.height) - Math.max(plate.y, box.y);
+                    return w > 0 && h > 0 && (w * h) / (plate.width * plate.height) > .5;
+                });
+                if (covered) return null;
+                var plateWords = (words || []).filter(function (word) { return inside(word, plate); });
+                var lines = groupWordsIntoLines(plateWords);
+                if (plateWords.length > 3 || lines.length > 1) return null;
+                var inset = 4;
+                var fill = plate.fill || [255, 255, 255];
+                var x0 = width, y0 = height, x1 = -1, y1 = -1, ink = 0;
+                for (var y = plate.y + inset; y < plate.y + plate.height - inset; y += 1) {
+                    for (var x = plate.x + inset; x < plate.x + plate.width - inset; x += 1) {
+                        var o = (y * width + x) * 4;
+                        if (Math.abs(data[o] - fill[0]) + Math.abs(data[o + 1] - fill[1]) + Math.abs(data[o + 2] - fill[2]) > 60) {
+                            ink += 1;
+                            if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+                        }
+                    }
+                }
+                if (ink < 40 || x1 < x0) return null;
+                var mark = { x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1 };
+                var offX = Math.abs(mark.x + mark.width / 2 - (plate.x + plate.width / 2)) / plate.width;
+                var offY = Math.abs(mark.y + mark.height / 2 - (plate.y + plate.height / 2)) / plate.height;
+                if (offX > .2 || offY > .25 || mark.width > plate.width * .85 || mark.height > plate.height * .8) return null;
+                return { plate: plate, mark: mark, words: plateWords, icons: (icons || []).filter(function (icon) { return inside(icon, plate); }) };
+            });
+            var alike = plates.filter(Boolean);
+            if (alike.length >= 4 && alike.length >= group.members.length * .7) found = found.concat(alike);
+        });
+        return found;
+    }
+
     // Geometry and colour only; nothing here reads text. Sizes are relative to page width (screenshots may be 2x).
     function classifySurfaces(surfaces, pageWidth, data, height) {
         var unit = pageWidth / 100;
@@ -1657,6 +1715,7 @@
         detectOutline: detectOutline,
         detectIconBlobs: detectIconBlobs,
         findIcons: findIcons,
+        detectLogoTiles: detectLogoTiles,
         isColourful: isColourful,
         isRuleWord: isRuleWord,
         detectPhotoRegions: detectPhotoRegions,

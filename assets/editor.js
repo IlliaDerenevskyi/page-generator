@@ -933,6 +933,11 @@
                     }).then(function (results) {
                         var found = window.PageGeneratorDetectors.findIcons(pixelData, canvas.width, canvas.height, results[0]);
                         results[0] = results[0].filter(function (word) { return found.droppedWords.indexOf(word) === -1; });
+                        // A wall of brand logos: each plate's mark is one picture, the pieces OCR made of it (words and icons) are dropped.
+                        var logoTiles = window.PageGeneratorDetectors.detectLogoTiles(surfaces, results[0], found.icons, results[1].boxes, pixelData, canvas.width, canvas.height);
+                        var logoMarks = logoTiles.map(function (tile) { return tile.mark; });
+                        results[0] = results[0].filter(function (word) { return !logoTiles.some(function (tile) { return tile.words.indexOf(word) !== -1; }); });
+                        found.icons = logoMarks.concat(found.icons.filter(function (icon) { return !logoTiles.some(function (tile) { return tile.icons.indexOf(icon) !== -1; }); }));
                         var iconCandidates = found.icons.filter(function (icon) {
                             // The blob is the plate itself (a small button or badge), not a picture on it.
                             var isPlate = surfaces.some(function (surface) {
@@ -1181,7 +1186,7 @@
 
     // Icons and logos cut out of the screenshot, uploaded as media assets (capped so a very busy page does not flood the server).
     function uploadIconCrops(canvas, icons) {
-        var limited = icons.slice(0, 40);
+        var limited = icons.slice(0, 60);
         return Promise.all(limited.map(function (icon, index) {
             return new Promise(function (resolve) {
                 var crop = document.createElement('canvas');

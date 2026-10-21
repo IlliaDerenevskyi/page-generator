@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, fixAiWord, isMonospaceLine, inkFontSize, baselineLineHeight, scoreFontWidths, chooseFont } = require('../assets/detectors');
+const { detectSurfaces, classifySurfaces, detectLineRuns, groupWordsIntoLines, isPhotographic, detectBands, flattenAlpha, estimateTextHeight, chooseOcrScale, resampleLanczos, prepareForOcr, assessResolution, detectOutline, detectIconBlobs, findIcons, detectLogoTiles, isColourful, isRuleWord, detectPhotoRegions, classifyTypeface, needsLatinReread, unmixScripts, fixAiWord, isMonospaceLine, inkFontSize, baselineLineHeight, scoreFontWidths, chooseFont } = require('../assets/detectors');
 
 function canvas(width, height, color) {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -590,4 +590,35 @@ test('fixAiWord reads "Al" as "AI" except in a name', () => {
     assert.strictEqual(fixAiWord('WHAT IS Al'), 'WHAT IS AI');
     assert.strictEqual(fixAiWord('Al Gore spoke'), 'Al Gore spoke');
     assert.strictEqual(fixAiWord('Algebra and Alice'), 'Algebra and Alice');
+});
+
+function logoWall(markHeight) {
+    const width = 1000;
+    const height = 400;
+    const data = new Uint8ClampedArray(width * height * 4).fill(245);
+    const surfaces = [];
+    for (let i = 0; i < 4; i += 1) {
+        const plate = { kind: 'surface', x: 50 + i * 230, y: 100, width: 210, height: 90, fill: [255, 255, 255] };
+        surfaces.push(plate);
+        for (let y = plate.y; y < plate.y + plate.height; y += 1) for (let x = plate.x; x < plate.x + plate.width; x += 1) data.set([255, 255, 255, 255], (y * width + x) * 4);
+        for (let y = plate.y + 45 - markHeight / 2; y < plate.y + 45 + markHeight / 2; y += 1) for (let x = plate.x + 40; x < plate.x + 170; x += 1) data.set([200, 20, 20, 255], (y * width + x) * 4);
+    }
+    return { width, height, data, surfaces };
+}
+
+test('detectLogoTiles cuts the mark out of each plate of a wall of equal plates', () => {
+    const { width, height, data, surfaces } = logoWall(30);
+    const words = [{ text: 'PH', x: 100, y: 120, width: 40, height: 28 }];
+    const tiles = detectLogoTiles(surfaces, words, [], [], data, width, height);
+    assert.equal(tiles.length, 4);
+    assert.deepEqual([tiles[0].mark.x, tiles[0].mark.y, tiles[0].mark.width, tiles[0].mark.height], [90, 130, 130, 30]);
+    assert.deepEqual(tiles[0].words, words);
+});
+
+test('detectLogoTiles leaves plates with lines of text, and fewer than four plates, alone', () => {
+    const { width, height, data, surfaces } = logoWall(30);
+    const lines = [];
+    surfaces.forEach((plate) => { lines.push({ text: 'Title', x: plate.x + 10, y: plate.y + 10, width: 80, height: 14 }); lines.push({ text: 'Body', x: plate.x + 10, y: plate.y + 50, width: 80, height: 14 }); });
+    assert.equal(detectLogoTiles(surfaces, lines, [], [], data, width, height).length, 0);
+    assert.equal(detectLogoTiles(surfaces.slice(0, 3), [], [], [], data, width, height).length, 0);
 });
