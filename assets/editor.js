@@ -1904,6 +1904,8 @@
                     confidence: line.words.length ? line.words.reduce(function (sum, word) { return sum + Number(word.confidence || 0); }, 0) / line.words.length / 100 : 0,
                     source: { detectedBy: ['ocr'], manual: false }
                 };
+                // The words of a short line stay on the node while the description is applied (a menu OCR read as one line is cut at its gaps); then they are dropped.
+                if (line.words.length >= 2 && line.words.length <= 12 && line.height <= 40) node.lineWords = line.words.map(function (word) { return [word.x, word.y, word.width, word.height, word.text]; });
                 var typeface = detectLineTypeface(analysis.canvas, line, node.style.fontWeight);
                 if (window.PageGeneratorDetectors.isMonospaceLine(line.words)) node.style.fontFamily = 'mono';
                 else if (typeface && typeface.serif) node.style.fontFamily = 'serif';
@@ -1934,6 +1936,7 @@
             sections: sections
         };
         applyBehaviorIntents(pageSchema, window.PageGeneratorDetectors.parseBehaviorIntents(description), anchorSuffix);
+        pageSchema.sections.forEach(function (section) { eachSchemaNode(section, function (node) { delete node.lineWords; }); });
         return pageSchema;
     }
 
@@ -3295,24 +3298,168 @@
         getNodeChildren(node).forEach(function (child) { appendTreeNode(lines, child, depth + 1); });
     }
 
+    // OCR joins the words of a menu into one line when the gaps between them are small: such a line is cut into parts at its wider gaps.
+    function behaviorLineParts(node) {
+        var words = node.lineWords;
+        if (!words || words.length < 2) return null;
+        var sorted = words.slice().sort(function (a, b) { return a[0] - b[0]; });
+        var heights = sorted.map(function (word) { return word[3]; }).sort(function (a, b) { return a - b; });
+        var limit = Math.max(6, heights[Math.floor(heights.length / 2)] * .5);
+        var groups = [[sorted[0]]];
+        for (var index = 1; index < sorted.length; index += 1) {
+            var gap = sorted[index][0] - (sorted[index - 1][0] + sorted[index - 1][2]);
+            if (gap > limit) groups.push([]);
+            groups[groups.length - 1].push(sorted[index]);
+        }
+        if (groups.length < 2) return null;
+        return groups.map(function (group) {
+            var x = Math.min.apply(null, group.map(function (word) { return word[0]; }));
+            var y = Math.min.apply(null, group.map(function (word) { return word[1]; }));
+            var right = Math.max.apply(null, group.map(function (word) { return word[0] + word[2]; }));
+            var bottom = Math.max.apply(null, group.map(function (word) { return word[1] + word[3]; }));
+            return { text: group.map(function (word) { return word[4]; }).join(' '), bbox: { x: x, y: y, width: right - x, height: bottom - y } };
+        });
+    }
+
+    // A line node becomes one node per part, each at its own place (the line is replaced in its parent). Done once per node.
+    var behaviorSplits = new Map();
+    function splitLineNode(node, parent) {
+        if (behaviorSplits.has(node)) return behaviorSplits.get(node);
+        var made = behaviorLineParts(node).map(function (part) {
+            var copy = Object.assign({}, node, { id: randomId(), text: part.text, content: part.text, bbox: part.bbox, settings: Object.assign({}, node.settings || {}, { x: part.bbox.x, y: part.bbox.y, width: part.bbox.width, height: part.bbox.height }), style: Object.assign({}, node.style || {}), behavior: Object.assign({}, node.behavior || {}), children: [], elements: [] });
+            delete copy.lineWords;
+            return copy;
+        });
+        [parent && parent.children, parent && parent.elements].forEach(function (siblings) {
+            var at = siblings ? siblings.indexOf(node) : -1;
+            if (at !== -1) siblings.splice.apply(siblings, [at, 1].concat(made));
+        });
+        behaviorSplits.set(node, made);
+        return made;
+    }
+
     function behaviorNodeText(node) {
         return String((node && (node.text || node.content)) || '').trim();
     }
 
-    function eachSchemaNode(node, visit) {
-        visit(node);
+    function eachSchemaNode(node, visit, parent) {
+        visit(node, parent);
         var kids = node.children && node.children.length ? node.children : (node.elements || []);
-        kids.forEach(function (child) { eachSchemaNode(child, visit); });
+        kids.slice().forEach(function (child) { eachSchemaNode(child, visit, node); });
     }
 
     // The description says what the page does; this acts on what is recognised and reports what was done and what could not be, so nothing is dropped
     // silently. For now: the items of a menu lead to the sections of the page ("anchors").
     function applyBehaviorIntents(schema, intents, anchorSuffix) {
         var report = [];
-        (intents || []).forEach(function (intent) {
+        behaviorSplits = new Map();
+        (intents || []).forEach(function (intent, index) {
             if (intent.action === 'anchors') report.push(applyMenuAnchors(schema.sections || [], intent, anchorSuffix || ''));
+            else if (intent.action === 'unknown') report.push({ action: 'unknown', ok: false, source: intent.source, message: 'Речення не розпізнано.' });
+            else report.push(applyLabelledIntent(schema.sections || [], intent, index));
         });
         if (report.length) schema.behavior = report;
+    }
+
+    // The element a label names on the page: the leaf node whose text equals it, else starts with it, else contains it; the shortest text wins a tie.
+    function findNodeByLabel(sections, label, minScore) {
+        var normalize = function (text) { return String(text).toLowerCase().replace(/[^a-zа-яіїєґ0-9]+/g, ' ').trim(); };
+        var wanted = normalize(label);
+        if (!wanted) return null;
+        var best = null, bestScore = 0, bestLength = 0;
+        var consider = function (candidate, label) {
+            var text = normalize(label);
+            if (!text) return;
+            var score = text === wanted ? 3 : (text.indexOf(wanted) === 0 || (text.length >= 4 && wanted.indexOf(text) === 0) ? 2 : (wanted.length >= 4 && text.indexOf(wanted) !== -1 ? 1 : 0));
+            if (score >= (minScore || 1) && (score > bestScore || (score === bestScore && text.length < bestLength))) { best = candidate; bestScore = score; bestLength = text.length; }
+        };
+        sections.forEach(function (section) {
+            eachSchemaNode(section, function (node, parent) {
+                var leaf = !(node.children && node.children.length) && !(node.elements && node.elements.length);
+                if (!leaf || ['text', 'link', 'heading', 'badge', 'button'].indexOf(node.type) === -1) return;
+                consider({ node: node }, behaviorNodeText(node));
+                // A line OCR joined from several items offers each of them, so "past" is found in "new  past  comments".
+                var parts = node.type === 'badge' || node.type === 'button' ? null : behaviorLineParts(node);
+                if (parts) parts.forEach(function (part, position) { consider({ node: node, parent: parent, part: position }, part.text); });
+            }, null);
+        });
+        return best;
+    }
+
+    // The node a candidate stands for; a part of a line is made a node of its own first.
+    function resolveCandidate(candidate) {
+        if (!candidate) return null;
+        return candidate.part === undefined ? candidate.node : splitLineNode(candidate.node, candidate.parent)[candidate.part];
+    }
+
+    // A label with words around it ("SSH у бічній панелі", "хрестиком біля блоку More workflows"): the whole label first, then its shorter runs of words, longest first, each by exact text.
+    function findNodeByLabelLoose(sections, label) {
+        var whole = findNodeByLabel(sections, label);
+        if (whole) return whole;
+        var words = String(label).split(/\s+/).filter(Boolean);
+        for (var length = words.length - 1; length >= 1; length -= 1) {
+            for (var start = 0; start + length <= words.length; start += 1) {
+                var phrase = words.slice(start, start + length).join(' ');
+                if (phrase.replace(/[^A-Za-zА-Яа-яІіЇїЄєҐґ0-9]/g, '').length < 3) continue;
+                var node = findNodeByLabel(sections, phrase, 3);
+                if (node) return node;
+            }
+        }
+        return null;
+    }
+
+    // The section whose heading answers to a title (the shortest such heading wins).
+    function findSectionByTitle(sections, title) {
+        var normalize = function (text) { return String(text).toLowerCase().replace(/[^a-zа-яіїєґ0-9]+/g, ' ').trim(); };
+        var wanted = normalize(title);
+        var best = null, bestLength = 0;
+        sections.forEach(function (section) {
+            eachSchemaNode(section, function (node) {
+                if (node.type !== 'heading') return;
+                var text = normalize(behaviorNodeText(node));
+                if (text && (text === wanted || text.indexOf(wanted) !== -1 || (text.length >= 4 && wanted.indexOf(text) !== -1)) && (!best || text.length < bestLength)) { best = section; bestLength = text.length; }
+            });
+        });
+        return best;
+    }
+
+    // The behaviours that are recorded in the schema but not yet played by the page (the page keeps its look; the meaning travels with the node).
+    // Only a link with an address changes what is exported today.
+    function applyLabelledIntent(sections, intent, index) {
+        var result = { action: intent.action, source: intent.source, labels: [], unbound: [], items: intent.items || [], ok: false, effect: 'recorded' };
+        if (!intent.labels || !intent.labels.length) { result.message = 'Елемент без підпису (поле, іконка, область) поки не прив\u2019язується.'; return result; }
+        var labels = intent.labels.slice();
+        for (var at = 0; at < labels.length; at += 1) {
+            var label = labels[at];
+            var node = resolveCandidate(findNodeByLabelLoose(sections, label));
+            // "Питання та відповіді" was cut at "та" into two labels that are one: when neither is found alone, the pair is tried joined.
+            if (!node && at + 1 < labels.length && !findNodeByLabel(sections, labels[at + 1])) {
+                var joined = ['та', 'і', 'and'].map(function (word) { return label + ' ' + word + ' ' + labels[at + 1]; }).find(function (phrase) { return findNodeByLabel(sections, phrase, 3); });
+                if (joined) { label = joined; node = resolveCandidate(findNodeByLabel(sections, joined, 3)); at += 1; }
+            }
+            if (!node) { result.unbound.push(label); continue; }
+            node.behavior = Object.assign({}, node.behavior || {}, { type: intent.action, group: 'intent-' + index });
+            // The sentence names the section the element leads to: that section gets an anchor and the element a link to it.
+            if (intent.target) {
+                var section = findSectionByTitle(sections, intent.target);
+                if (section) {
+                    if (!section.anchor) section.anchor = window.PageGeneratorDetectors.slugify(intent.target) || 'section';
+                    node.behavior = { type: 'anchor', url: '#' + section.anchor, target: section.id, group: 'intent-' + index };
+                    if (node.type === 'text' || node.type === 'badge') { node.type = 'link'; node.role = 'navigation-item'; }
+                    result.effect = 'rendered';
+                } else result.message = 'Розділ «' + intent.target + '» на знімку не знайдено.';
+            }
+            if (intent.items && intent.items.length) node.behavior.items = intent.items;
+            if (intent.url) {
+                node.behavior.url = intent.url;
+                if (node.type === 'text' || node.type === 'badge') { node.type = 'link'; node.role = 'navigation-item'; }
+                if (intent.action === 'link') result.effect = 'rendered';
+            }
+            result.labels.push({ label: label, id: node.id });
+        }
+        result.ok = result.labels.length > 0;
+        if (!result.ok) result.message = 'Жодного з підписів не знайдено на знімку.';
+        return result;
     }
 
     // The menu is the row of navigation links nearest to the top (or bottom) of the page; its items lead, in turn, to the sections after it (before
@@ -3325,36 +3472,47 @@
         var pageBottom = sections.reduce(function (bottom, section) { return Math.max(bottom, section.bbox ? section.bbox.y + section.bbox.height : 0); }, 0);
         var rows = [];
         sections.forEach(function (section, index) {
-            eachSchemaNode(section, function (node) {
-                var label = behaviorNodeText(node);
+            eachSchemaNode(section, function (node, parent) {
                 var leaf = !(node.children && node.children.length) && !(node.elements && node.elements.length);
-                if (!leaf || ['text', 'link', 'heading', 'badge'].indexOf(node.type) === -1 || !node.bbox || node.bbox.width > 360 || node.bbox.height < 8) return;
-                if (label.length < 2 || label.length > 30 || (label.match(/[A-Za-zА-Яа-яІіЇїЄєҐґ]/g) || []).length < 2) return;
-                var middle = node.bbox.y + node.bbox.height / 2;
-                var inRegion = intent.region === 'bottom' ? middle > pageBottom * .7 : middle < pageBottom * .25;
-                if (!inRegion) return;
-                // A menu can be cut across two bands of the page (a pill in its middle has a band of its own), so a row is a height, not a band.
-                var row = rows.find(function (candidate) { return Math.abs(candidate.y - middle) <= Math.max(6, node.bbox.height * .4); });
-                if (row) row.nodes.push({ node: node, section: index }); else rows.push({ y: middle, nodes: [{ node: node, section: index }] });
-            });
+                if (!leaf || ['text', 'link', 'heading', 'badge'].indexOf(node.type) === -1 || !node.bbox || node.bbox.height < 8) return;
+                var parts = node.type === 'badge' ? null : behaviorLineParts(node);
+                var entries = parts ? parts.map(function (part, position) { return { node: node, parent: parent, part: position, text: part.text, bbox: part.bbox, type: node.type, section: index }; })
+                    : [{ node: node, parent: parent, part: null, text: behaviorNodeText(node), bbox: node.bbox, type: node.type, section: index }];
+                entries.forEach(function (entry) {
+                    if (entry.bbox.width > 360 || entry.text.length < 2 || entry.text.length > 30 || (entry.text.match(/[A-Za-zА-Яа-яІіЇїЄєҐґ]/g) || []).length < 2) return;
+                    var middle = entry.bbox.y + entry.bbox.height / 2;
+                    var inRegion = intent.region === 'bottom' ? middle > pageBottom * .7 : middle < pageBottom * .25;
+                    if (!inRegion) return;
+                    // A menu can be cut across two bands of the page (a pill in its middle has a band of its own), so a row is a height, not a band.
+                    // The nearest row takes it (a logo whose text sits a few pixels higher must not swallow the first item of the menu), and its height follows its members.
+                    var tolerance = Math.max(6, entry.bbox.height * .4);
+                    var row = null;
+                    rows.forEach(function (candidate) {
+                        var distance = Math.abs(candidate.y - middle);
+                        if (distance <= tolerance && (!row || distance < Math.abs(row.y - middle))) row = candidate;
+                    });
+                    if (row) { row.nodes.push(entry); row.y = row.nodes.reduce(function (sum, member) { return sum + member.bbox.y + member.bbox.height / 2; }, 0) / row.nodes.length; }
+                    else rows.push({ y: middle, nodes: [entry] });
+                });
+            }, null);
         });
         // A row is cut where the gap is much wider than the text (the search box and icons next to a menu are not menu items).
         var chunks = [];
         rows.forEach(function (row) {
-            var ordered = row.nodes.slice().sort(function (a, b) { return a.node.bbox.x - b.node.bbox.x; });
-            var heights = ordered.map(function (entry) { return entry.node.bbox.height; }).sort(function (a, b) { return a - b; });
+            var ordered = row.nodes.slice().sort(function (a, b) { return a.bbox.x - b.bbox.x; });
+            var heights = ordered.map(function (entry) { return entry.bbox.height; }).sort(function (a, b) { return a - b; });
             var limit = Math.max(48, heights[Math.floor(heights.length / 2)] * 3);
             var current = [];
             var flush = function () {
                 if (!current.length) return;
-                chunks.push({ section: Math.max.apply(null, current.map(function (entry) { return entry.section; })), y: row.y, items: current.map(function (entry) { return entry.node; }) });
+                chunks.push({ section: Math.max.apply(null, current.map(function (entry) { return entry.section; })), y: row.y, items: current });
                 current = [];
             };
             ordered.forEach(function (entry) {
                 var last = current[current.length - 1];
                 // OCR boxes of one menu differ in height with the letters in them (ascenders, descenders): twofold is still one size; a pill around a label is as tall as its padding, so it is not measured.
-                var similar = !last || last.node.type === 'badge' || entry.node.type === 'badge' || Math.max(last.node.bbox.height, entry.node.bbox.height) <= Math.min(last.node.bbox.height, entry.node.bbox.height) * 2.2;
-                if (last && (entry.node.bbox.x - (last.node.bbox.x + last.node.bbox.width) > limit || !similar)) flush();
+                var similar = !last || last.type === 'badge' || entry.type === 'badge' || Math.max(last.bbox.height, entry.bbox.height) <= Math.min(last.bbox.height, entry.bbox.height) * 2.2;
+                if (last && (entry.bbox.x - (last.bbox.x + last.bbox.width) > limit || !similar)) flush();
                 current.push(entry);
             });
             flush();
@@ -3368,19 +3526,26 @@
             return intent.region === 'bottom' ? b.y - a.y : a.y - b.y;
         })[0];
         if (intent.count && menu.items.length !== intent.count) result.message = 'В описі ' + intent.count + ' пунктів, на знімку знайдено ' + menu.items.length + '.';
-        var items = menu.items;
+        // The items that came from one line become nodes of their own (one node per item, at the item's own place).
+        var items = menu.items.map(function (entry) { return entry.part === null ? entry.node : splitLineNode(entry.node, entry.parent)[entry.part]; });
         var targets = sections.map(function (section, index) { return { section: section, index: index }; }).filter(function (target) {
             return target.index !== menu.section && (intent.region === 'bottom' ? target.index < menu.section : target.index > menu.section);
         });
         if (!targets.length) { result.message = (result.message ? result.message + ' ' : '') + 'Після меню немає розділів, до яких можна вести.'; return result; }
         var normalize = function (text) { return String(text).toLowerCase().replace(/[^a-zа-яіїєґ0-9]+/g, ' ').trim(); };
-        var texts = function (target, headingsOnly) {
+        // The titles a section answers to: its headings; failing that, its text that is set larger than the menu items (a footer repeats the menu in small type).
+        var itemHeights = items.map(function (item) { return item.bbox ? item.bbox.height : 0; }).sort(function (a, b) { return a - b; });
+        var larger = (itemHeights[Math.floor(itemHeights.length / 2)] || 0) * 1.15;
+        var titles = function (target, headingsOnly) {
             var found = [];
             eachSchemaNode(target.section, function (node) {
-                if ((node.type === 'heading' || (!headingsOnly && node.type === 'text')) && behaviorNodeText(node)) found.push(normalize(behaviorNodeText(node)));
+                var heading = node.type === 'heading';
+                var big = node.type === 'text' && node.bbox && node.bbox.height >= larger;
+                if ((heading || (!headingsOnly && big)) && behaviorNodeText(node)) found.push(normalize(behaviorNodeText(node)));
             });
-            return found.join(' | ');
+            return found;
         };
+        var texts = function (target, headingsOnly) { return titles(target, headingsOnly).join(' | '); };
         var mentions = function (haystack, label) {
             var key = normalize(label);
             if (key.length < 3) return false;
@@ -3388,15 +3553,43 @@
             // Word endings differ ("Контакти" / "Контактів"): the first five letters of a longer word decide.
             return key.split(' ').some(function (word) { return word.length >= 5 && haystack.indexOf(word.slice(0, 5)) !== -1; });
         };
+        // The shortest title that mentions the label is the most specific one ("Поточний моніторинг" before "Професійний акустичний моніторинг").
+        var pickTarget = function (label, headingsOnly) {
+            var best = null, bestLength = 0;
+            targets.forEach(function (target) {
+                if (taken[target.index]) return;
+                titles(target, headingsOnly).forEach(function (title) {
+                    if (!mentions(title, label)) return;
+                    if (!best || title.length < bestLength) { best = target; bestLength = title.length; best.title = title; }
+                });
+            });
+            return best;
+        };
         var taken = {};
         var chosen = items.map(function (item) {
             var label = behaviorNodeText(item);
-            var hit = targets.find(function (target) { return !taken[target.index] && mentions(texts(target, true), label); }) ||
-                targets.find(function (target) { return !taken[target.index] && mentions(texts(target, false), label); });
+            var hit = pickTarget(label, true) || pickTarget(label, false);
             if (hit) taken[hit.index] = true;
             return hit || null;
         });
         var byText = chosen.filter(Boolean).length * 2 >= items.length;
+        // "Головна" / "Home" leads to the top of the page: the first section of the page is its place.
+        chosen.forEach(function (target, position) {
+            if (!target && /^(головна|головне|на головну|home|main)$/i.test(behaviorNodeText(items[position]).trim()) && sections.length) {
+                chosen[position] = { section: sections[0], index: 0, title: 'home' };
+            }
+        });
+        // An item no title answers to still has its place in the order: between the sections of its matched neighbours, if exactly one is left there.
+        if (byText) {
+            chosen.forEach(function (target, position) {
+                if (target) return;
+                var before = menu.section, after = Infinity;
+                for (var back = position - 1; back >= 0; back -= 1) if (chosen[back]) { before = chosen[back].index; break; }
+                for (var ahead = position + 1; ahead < chosen.length; ahead += 1) if (chosen[ahead]) { after = chosen[ahead].index; break; }
+                var between = targets.filter(function (candidate) { return !taken[candidate.index] && candidate.index > before && candidate.index < after; });
+                if (intent.region !== 'bottom' && between.length === 1) { between[0].title = behaviorNodeText(items[position]).toLowerCase(); chosen[position] = between[0]; taken[between[0].index] = true; }
+            });
+        }
         result.mode = byText ? 'text' : 'order';
         if (!byText) chosen = items.map(function (item, position) { return targets[position] || null; });
         var names = {};
@@ -3405,7 +3598,7 @@
             if (!target) { result.unlinked.push(behaviorNodeText(item)); return; }
             var section = target.section;
             if (!section.anchor) {
-                var base = tools.slugify(texts(target, true).split(' | ')[0] || texts(target, false).split(' | ')[0]) || 'section-' + (target.index + 1);
+                var base = tools.slugify(target.title || texts(target, true).split(' | ')[0] || texts(target, false).split(' | ')[0]) || 'section-' + (target.index + 1);
                 var name = base;
                 for (var copy = 2; names[name + anchorSuffix]; copy += 1) name = base + '-' + copy;
                 names[name + anchorSuffix] = true;
@@ -3422,20 +3615,30 @@
     }
 
     // What the description turned into, as text for the status line (the person reads it after the build).
+    var BEHAVIOR_NAMES = { dropdown: 'випадаюче меню', tabs: 'вкладки', carousel: 'карусель', dismiss: 'закриття', submit: 'надсилання форми', toggle: 'перемикач', expand: 'розгортання', filter: 'фільтр', copy: 'копіювання', cart: 'кошик/обране', search: 'пошук', popup: 'спливаюче вікно', link: 'посилання' };
+
     function describeBehavior(schema) {
         var esc = function (text) { return $('<div>').text(text).html(); };
         var lines = [];
         (schema.behavior || []).forEach(function (entry) {
-            if (entry.ok) {
-                lines.push('Якорі меню (' + (entry.mode === 'text' ? 'за назвами розділів' : 'за порядком') + '): ' + entry.links.map(function (link) { return esc(link.text) + ' → #' + esc(link.anchor); }).join(', ') +
-                    (entry.unlinked.length ? '. <span class="page-generator-warning">Без розділу: ' + entry.unlinked.map(esc).join(', ') + '</span>' : '') +
-                    (entry.message ? '. <span class="page-generator-warning">' + esc(entry.message) + '</span>' : ''));
+            if (entry.action === 'anchors') {
+                if (entry.ok) {
+                    lines.push('Якорі меню (' + (entry.mode === 'text' ? 'за назвами розділів' : 'за порядком') + '): ' + entry.links.map(function (link) { return esc(link.text) + ' → #' + esc(link.anchor); }).join(', ') +
+                        (entry.unlinked.length ? '. <span class="page-generator-warning">Без розділу: ' + entry.unlinked.map(esc).join(', ') + '</span>' : '') +
+                        (entry.message ? '. <span class="page-generator-warning">' + esc(entry.message) + '</span>' : ''));
+                } else {
+                    lines.push('<span class="page-generator-warning">Не застосовано: «' + esc(entry.source) + '». ' + esc(entry.message || '') + '</span>');
+                }
+            } else if (entry.action === 'unknown') {
+                lines.push('<span class="page-generator-warning">Не розпізнано: «' + esc(entry.source) + '»</span>');
             } else {
-                lines.push('<span class="page-generator-warning">Не застосовано: «' + esc(entry.source) + '». ' + esc(entry.message || '') + '</span>');
+                var name = BEHAVIOR_NAMES[entry.action] || entry.action;
+                lines.push(esc(name) + ': ' + (entry.labels.length ? entry.labels.map(function (item) { return esc(item.label); }).join(', ') : '—') +
+                    (entry.unbound.length ? '. <span class="page-generator-warning">Не знайдено на знімку: ' + entry.unbound.map(esc).join(', ') + '</span>' : '') +
+                    (entry.message ? '. <span class="page-generator-warning">' + esc(entry.message) + '</span>' : '') +
+                    (entry.ok && entry.effect === 'recorded' ? ' <span class="page-generator-note">(записано в схемі, сторінка ще не виконує)</span>' : ''));
             }
         });
-        var unused = (schema.hints || []).map(function (hint) { return hint.type; }).filter(function (type, index, all) { return all.indexOf(type) === index; });
-        if (unused.length) lines.push('<span class="page-generator-note">Згадано в описі, але ще не застосовується: ' + unused.map(esc).join(', ') + '.</span>');
         return lines.length ? '<br>' + lines.join('<br>') : '';
     }
 

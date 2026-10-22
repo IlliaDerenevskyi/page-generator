@@ -129,3 +129,12 @@ node screenshot-runner.js --url <page-url> --allowed-host <host> --source refere
 
 Put a PNG (1x, desktop width ~1370-1440) in `desktop/` or `heavy/`, run `npm run bench:update`, and add a row to the table above.
 Keep it under ~3 MB; a new file gets a baseline on its first update and is never reported as a regression.
+
+## Descriptions (behaviour)
+
+`descriptions.json` holds, per screenshot, a description of what the page does ("кнопка Code відкриває випадаюче меню ...") written the way a person
+would write it. A plain run (`php mcp-make.php <dir>`) measures without descriptions, so the baselines stay comparable; with `describe`
+(`php mcp-make.php <dir> describe`) each screenshot gets its description and the run also returns what the description became: sentences, those
+the dictionary did not understand, labels found on the page and labels that were not (`node behavior-report.js results.jsonl` prints it).
+`detectors.test.js` checks that every description is understood by the dictionary of meanings (no sentence is left `unknown`). The visual metrics
+of a `describe` run must stay at the baseline: a description changes what the page means, not how it looks.

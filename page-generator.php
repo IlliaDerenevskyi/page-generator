@@ -1161,7 +1161,9 @@ final class Page_Generator_Plugin {
         if (in_array($type, $text_types, true)) {
             $label = (string) ($node['text'] ?? ($node['content'] ?? ''));
             $has_plate = !empty($style['background']) || !empty($node['background']);
-            $widget = $this->elementor_text_widget($id, $type, $label, $style, $settings, $text_color, $has_plate);
+            // A link keeps its address (a page, or an anchor of a section: "#section"); a bare "#" is no address.
+            $link_url = $type === 'link' ? esc_url_raw($node['behavior']['url'] ?? '') : '';
+            $widget = $this->elementor_text_widget($id, $type, $label, $style, $settings, $text_color, $has_plate, $link_url !== '#' ? $link_url : '');
             if (!$has_plate) {
                 return $this->apply_elementor_geometry($widget, $node, $parent_bbox);
             }
@@ -1284,7 +1286,7 @@ final class Page_Generator_Plugin {
         return $out;
     }
 
-    private function elementor_text_widget($id, $type, $label, $style, $settings, $text_color, $has_plate) {
+    private function elementor_text_widget($id, $type, $label, $style, $settings, $text_color, $has_plate, $url = '') {
         $has_color = !empty($style['color']);
         $nowrap = strpos($label, "\n") === false;
         $common = [
@@ -1295,11 +1297,14 @@ final class Page_Generator_Plugin {
         $mono = ($style['fontFamily'] ?? '') === 'mono';
         if ($type === 'heading') {
             $widget_settings = ['title' => $mono ? '<code>' . esc_html($label) . '</code>' : wp_kses_post($label)] + $common;
+            if ($url !== '') $widget_settings['link'] = ['url' => $url, 'is_external' => '', 'nofollow' => '', 'custom_attributes' => ''];
             if ($has_color) $widget_settings['title_color'] = $text_color;
             return ['id' => $id, 'elType' => 'widget', 'widgetType' => 'heading', 'settings' => $widget_settings, 'elements' => []];
         }
         $shown = nl2br(esc_html($label));
-        $widget_settings = ['editor' => '<p>' . ($mono ? '<code>' . $shown . '</code>' : $shown) . '</p>'] + $common;
+        $inner = $mono ? '<code>' . $shown . '</code>' : $shown;
+        if ($url !== '') $inner = '<a href="' . esc_url($url) . '">' . $inner . '</a>';
+        $widget_settings = ['editor' => '<p>' . $inner . '</p>'] + $common;
         if ($has_color) $widget_settings['text_color'] = $text_color;
         if ($has_plate) $widget_settings['align'] = 'center';
         return ['id' => $id, 'elType' => 'widget', 'widgetType' => 'text-editor', 'settings' => $widget_settings, 'elements' => []];

@@ -1116,26 +1116,143 @@
     var NUMBER_WORDS = { 'один': 1, 'одна': 1, 'два': 2, 'дві': 2, 'три': 3, 'чотири': 4, 'п’ять': 5, "п'ять": 5, 'шість': 6, 'сім': 7, 'вісім': 8, 'дев’ять': 9, "дев'ять": 9, 'десять': 10,
         one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
 
-    // What a description asks the page to do, as intents the builder can act on. Only what is recognised is returned; a sentence with no intent is not
-    // an error here (the caller decides what to say about it). "anchors": the items of a menu lead to the sections of the page ("the top menu has 4
-    // items, each leads to its section"): region 'top' (default) or 'bottom', and the number of items when the text gives one.
+    // The dictionary of meanings: what a sentence of a description can ask of the page. The first rule that matches a sentence names its action; the order
+    // goes from the specific to the general ("opens a drop-down menu" before plain "opens"). A sentence no rule matches is kept as 'unknown', so the
+    // caller can say what was not understood instead of dropping it.
+    // A pattern that starts a word (JavaScript's \b knows only Latin letters), for a list of stems.
+    function wordStarts(stems) {
+        return new RegExp('(?<![\\p{L}])(?:' + stems.join('|') + ')', 'u');
+    }
+
+    var BEHAVIOR_RULES = [
+        { action: 'menu', test: /(?<![\p{L}])меню[^:]*пункт\p{L}*(?:\s*:|\s+\p{L})/u },
+        { action: 'logout', test: wordStarts(['виходить', 'вихід']) },
+        { action: 'accept', test: wordStarts(['приймає', 'погоджується']) },
+        { action: 'load', test: wordStarts(['завантажує', 'підвантажує']) },
+        { action: 'dropdown', test: wordStarts(['випадаюч', 'розкривн', 'dropdown', 'drop-down']) },
+        { action: 'tabs', test: /(?<![\p{L}])вклад(?:к|ок)\p{L}*[^.]*(?<![\p{L}])(?:перемика|змінюють|показують)|(?<![\p{L}])(?:перемика|змінюють)\p{L}*[^.]*вклад(?:к|ок)|(?<![\p{L}])tabs?(?![\p{L}])/u },
+        { action: 'carousel', test: /(?<![\p{L}])(?:карусел|слайдер|гортає|гортають|carousel|slider)|(?<![\p{L}])перемика\p{L}*\s+слайд/u },
+        { action: 'dismiss', test: wordStarts(['закрива', 'ховає', 'прибира', 'dismiss']) },
+        { action: 'submit', test: wordStarts(['надсила', 'відправля', 'submit']) },
+        { action: 'toggle', test: /(?<![\p{L}])(?:перемика\p{L}*|змінює|змінюють)\s+(?:світл|темн|тем[уи]|мов[уи])|(?<![\p{L}])перемикач\p{L}*\s+(?:тем|мов)|(?<![\p{L}])theme(?![\p{L}])/u },
+        { action: 'expand', test: wordStarts(['розгорта', 'згорта', 'розкрива']) },
+        { action: 'filter', test: wordStarts(['фільтр']) },
+        { action: 'copy', test: wordStarts(['копіює', 'копіювати']) },
+        { action: 'cart', test: /(?<![\p{L}])додає\s+\S+(?:\s+\S+)?\s+(?:в|у|до)\s+(?:кошик|обране|закладк)|(?<![\p{L}])додає\s+(?:голос|в обране)/u },
+        { action: 'search', test: wordStarts(['шука', 'знаходить', 'пошук']) },
+        { action: 'popup', test: /(?<![\p{L}])відкрива\p{L}*\s+(?:спливаюч|модальн|вікно|кошик|форму|вхід)|(?<![\p{L}])спливаюч/u },
+        { action: 'link', test: wordStarts(['вед(?:е|уть)', 'переход', 'відкрива']) }
+    ];
+
+    // Words that name a kind of element or a place, not the element itself: stripped from the front of a subject to leave the label.
+    var GENERIC_LABEL_WORDS = /^(верхн\S*|нижн\S*|ліва|лівий|ліве|права|правий|праве|бічна|головн\S*|кнопк\S*|пункт\S*|посилан\S*|вкладк\S*|меню|іконк\S*|стрілк\S*|перемикач\S*|поле|поля|банер\S*|вікно|блок\S*|форм\S*|заголовк\S*|панел\S*|список|вибір|та|і|у|в|на|біля|з|із|є|має|усі|всі|кожен|кожна|кожне|груп\S*|елемент\S*|розділ\S*|пошук\S*|вкладок|панел\S*|мови|мова|версії|теми|змісту|коду|команди|категорій|користувача|кошика|копіювання|гілок|сповіщень)$/i;
+
+    // Where an element stands is not its label: the words from "вгорі" / "біля" on are cut off ("Українська мова вгорі", "вгору біля новини").
+    var PLACE_WORDS = /^(вгорі|угорі|внизу|зверху|знизу|праворуч|ліворуч|справа|зліва|збоку|вгору|вниз|біля|поруч|над|під)$/i;
+
+    function splitBehaviorList(text) {
+        return String(text).split(/\s*,\s*|\s+(?:та|і|або|and|or)\s+/).map(function (item) { return item.trim().replace(/^["«“]|["»”]$/g, ''); }).filter(function (item) { return item.length > 0 && item.length <= 40; });
+    }
+
+    // The labels a sentence speaks about: what stands in quotes, else the words of the subject (the part before the verb) once the generic words are gone,
+    // split at commas and "and"/"or".
+    function behaviorLabels(subject) {
+        var quoted = [];
+        subject.replace(/[«"“]([^»"”]+)[»"”]/g, function (all, inner) { quoted.push(inner.trim()); return all; });
+        if (quoted.length) return quoted;
+        var words = subject.replace(/[:;]+$/, '').split(/\s+/).filter(Boolean);
+        var named = false;
+        while (words.length && GENERIC_LABEL_WORDS.test(words[0].replace(/[,.]+$/, ''))) {
+            // "Кнопка зберегти": after the name of an element kind a lowercase word is the label itself.
+            if (/^(кнопк|посилан|пункт|вкладк)/i.test(words[0])) named = true;
+            words.shift();
+        }
+        var place = words.findIndex(function (word) { return PLACE_WORDS.test(word.replace(/[,.]+$/, '')); });
+        if (place !== -1) words = words.slice(0, place);
+        var rest = words.join(' ').trim();
+        if (!rest) return [];
+        // A list item in lowercase Cyrillic ("з кодом", "категорій") describes the element; the labels of a page are written as they stand there (capitals, Latin, digits).
+        return splitBehaviorList(rest).filter(function (part) { return named || !/^[а-яіїєґ’' -]+$/.test(part); });
+    }
+
+    // What a description asks the page to do, as intents the builder can act on. "anchors": the items of a menu lead to the sections of the page ("the top
+    // menu has 4 items, each leads to its section"): region 'top' (default) or 'bottom', and the number of items when the text gives one. Every other
+    // action carries `labels` (the elements it is about), `items` (a list after a colon) and `url` (a path or address named in the sentence).
     function parseBehaviorIntents(description) {
         var intents = [];
-        String(description || '').split(/[.!?\n]+/).forEach(function (sentence) {
-            var text = sentence.toLowerCase().trim();
+        String(description || '').split(/(?<=[.!?])\s+|\n+/).forEach(function (sentence) {
+            var original = sentence.trim().replace(/[.!?]+$/, '');
+            var text = original.toLowerCase();
             if (!text) return;
             var isMenu = /меню|навігац|menu|navigation|\bnav\b|пункт/.test(text);
             var leads = /вед(е|уть)|перех|прокру|скрол|якор|веде до|scroll|jump|leads?|links? to|anchor/.test(text);
             var section = /розділ|секці|блок|частин|section|block/.test(text);
-            if (!(isMenu && leads && section)) return;
-            var count = null;
-            var digits = /(\d+)\s*(пункт|елемент|посилан|item|link)/.exec(text);
-            if (digits) count = parseInt(digits[1], 10);
-            else {
-                var word = /([a-zа-яіїєґ’']+)\s+(пункт|елемент|посилан|item|link)/.exec(text);
-                if (word && NUMBER_WORDS[word[1]]) count = NUMBER_WORDS[word[1]];
+            if (isMenu && leads && section && /(відповідн|кожен|кожний|each)/.test(text)) {
+                var count = null;
+                var digits = /(\d+)\s*(пункт|елемент|посилан|item|link)/.exec(text);
+                if (digits) count = parseInt(digits[1], 10);
+                else {
+                    var word = /([a-zа-яіїєґ’']+)\s+(пункт|елемент|посилан|item|link)/.exec(text);
+                    if (word && NUMBER_WORDS[word[1]]) count = NUMBER_WORDS[word[1]];
+                }
+                intents.push({ action: 'anchors', region: /нижн|футер|підвал|footer|bottom/.test(text) ? 'bottom' : 'top', count: count, source: original });
+                return;
             }
-            intents.push({ action: 'anchors', region: /нижн|футер|підвал|footer|bottom/.test(text) ? 'bottom' : 'top', count: count, source: sentence.trim() });
+            // "У меню є пункти A, B та C, які ведуть ...": the head names the elements, the tail says what they do.
+            var declared = null;
+            var clause = /^(.*?),\s*(?:кожен|кожна|кожне|які|що)\s+(.+)$/i.exec(original);
+            if (clause) {
+                var list = /(?:пункти|пункт|посилання|вкладки|кнопки)\s+(.+)$/i.exec(clause[1]);
+                if (list) {
+                    declared = splitBehaviorList(list[1]);
+                    original = clause[2];
+                    text = original.toLowerCase();
+                }
+            }
+            // The rule is chosen by what the sentence says is done (the part from the verb on): a label can hold a word that is a verb elsewhere ("... submit ведуть на списки").
+            var predicateAt = /\s(?:відкрива\p{L}*|показу\p{L}*|перемика\p{L}*|закрива\p{L}*|надсила\p{L}*|відправля\p{L}*|веде|ведуть|додає|шука\p{L}*|знаходить|запуска\p{L}*|копіює|розгорта\p{L}*|згорта\p{L}*|розкрива\p{L}*|фільтру\p{L}*|змінює|змінюють|гортає|гортають|виходить|приймає|завантажує)(?![\p{L}])/iu.exec(text);
+            var predicate = predicateAt ? text.slice(predicateAt.index) : text;
+            var rule = BEHAVIOR_RULES.find(function (candidate) { return candidate.test.test(predicate); }) || BEHAVIOR_RULES.find(function (candidate) { return candidate.test.test(text); });
+            if (!rule) {
+                // "Кнопка Logout виходить з акаунта": an element and a label with an action the dictionary has no name for is still a press on that element.
+                var press = /^(?:кнопк\p{L}*|посилан\p{L}*|іконк\p{L}*|пункт\p{L}*|стрілк\p{L}*|заголовк\p{L}*)\s+(.+)$/iu.exec(original);
+                var pressed = [];
+                if (press) {
+                    var quotedPress = /^[«"“]([^»"”]+)[»"”]/.exec(press[1]);
+                    if (quotedPress) pressed.push(quotedPress[1]);
+                    else {
+                        var taken = [];
+                        press[1].split(/\s+/).some(function (word) {
+                            if (!/^[A-ZА-ЯІЇЄҐ0-9]/.test(word) && !/^[A-Za-z]/.test(word)) return true;
+                            taken.push(word);
+                            return false;
+                        });
+                        if (taken.length) pressed.push(taken.join(' '));
+                    }
+                }
+                if (pressed.length) intents.push({ action: 'press', labels: pressed, items: [], url: '', source: sentence.trim().replace(/[.!?]+$/, '') });
+                else intents.push({ action: 'unknown', source: sentence.trim().replace(/[.!?]+$/, '') });
+                return;
+            }
+            var found = rule.test.exec(text);
+            // The subject is what stands before the first verb ("Кнопка Code | відкриває ..."); a quotation anywhere in the sentence names the element.
+            var verb = /\s(?:відкрива\p{L}*|показу\p{L}*|перемика\p{L}*|закрива\p{L}*|надсила\p{L}*|відправля\p{L}*|веде|ведуть|додає|шука\p{L}*|знаходить|запуска\p{L}*|копіює|розгорта\p{L}*|згорта\p{L}*|розкрива\p{L}*|фільтру\p{L}*|змінює|змінюють|гортає|гортають|має|мають|є|виходить|приймає|завантажує)(?![\p{L}])/iu.exec(original);
+            var subject = original.slice(0, verb ? verb.index : found.index);
+            var colon = original.search(/:(?!\/\/)/);
+            var items = [];
+            if (colon !== -1) {
+                subject = original.slice(0, Math.min(verb ? verb.index : found.index, colon));
+                items = splitBehaviorList(original.slice(colon + 1));
+            }
+            var quoted = [];
+            original.replace(/[«"“]([^»"”]+)[»"”]/g, function (all, inner) { quoted.push(inner.trim()); return all; });
+            var url = /(https?:\/\/[^\s,;)]+|(?:^|\s)(\/[\w\-/.]+))/.exec(original);
+            var labels = declared || (quoted.length ? quoted : behaviorLabels(subject));
+            // A menu declared with its items ("the menu has seven items: A, B, ...") speaks about the items themselves.
+            if (rule.action === 'menu') { labels = items; items = []; }
+            // "... веде до розділу Напрями роботи": the section the element leads to, named by its title.
+            var target = rule.action === 'link' ? /(?:до|на)\s+(?:розділу|розділ|секції|секцію|блоку|блок)\s+(.+)$/i.exec(original) : null;
+            intents.push({ action: rule.action, labels: labels, items: items, url: url ? (url[2] || url[1]).trim() : '', target: target ? target[1].trim().replace(/^[«"“]|[»"”]$/g, '') : '', source: sentence.trim().replace(/[.!?]+$/, '') });
         });
         return intents;
     }

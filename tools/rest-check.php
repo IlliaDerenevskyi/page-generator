@@ -419,6 +419,18 @@ $rename_anchor = function ($blocks) use (&$rename_anchor, $anchor_id) {
 wp_update_post(['ID' => $post, 'post_content' => wp_slash(serialize_blocks($rename_anchor(parse_blocks(get_post($post)->post_content))))]);
 $check('an anchor edited in Gutenberg reaches the node', ($flow_node($anchor_id)['anchor'] ?? '') === 'renamed-section');
 $call('PUT', $route, ['schema' => $anchor_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$link_schema = $flow_schema;
+$link_set = function (&$nodes) use (&$link_set) {
+    foreach ($nodes as &$n) {
+        if (($n['id'] ?? '') === 't1') { $n['type'] = 'link'; $n['behavior'] = ['type' => 'anchor', 'url' => '#intro-section']; }
+        foreach (['children', 'elements'] as $key) if (!empty($n[$key])) $link_set($n[$key]);
+    }
+    unset($n);
+};
+$link_set($link_schema['sections']);
+$call('PUT', $route, ['schema' => $link_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
+$check('a link keeps its address in Elementor (text editor and heading widgets)', strpos(get_post_meta($post, '_elementor_data', true), 'href=\\"#intro-section') !== false || strpos(get_post_meta($post, '_elementor_data', true), '"url":"#intro-section"') !== false);
+$call('PUT', $route, ['schema' => $anchor_schema, 'layout' => 'pixel', 'editorMode' => 'elementor']);
 $check('a section anchor becomes the CSS ID of the Elementor container', strpos(get_post_meta($post, '_elementor_data', true), '"_element_id":"intro-section"') !== false);
 
 // Font family names: style.fontFamily holds a slug of a shipped web font; both exporters write its class, the bridges read it back.

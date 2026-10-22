@@ -5,6 +5,8 @@ async (page) => {
     const targets = __TARGETS__;
     const mode = '__MODE__';
     const cookies = __COOKIES__;
+    // Per-file descriptions (php mcp-make.php <dir> describe); empty for a plain measurement.
+    const descriptions = __DESCRIPTIONS__;
     await page.context().addCookies(cookies);
     // The MCP browser keeps its cache between runs: without this an edited editor.js/detectors.js would not be picked up.
     await (await page.context().newCDPSession(page)).send('Network.setCacheDisabled', { cacheDisabled: true });
@@ -16,6 +18,8 @@ async (page) => {
         await page.click('.page-generator-topbar-button');
         await page.click('[data-view="screenshots"]').catch(() => {});
         await page.waitForSelector('#pg-images', { state: 'attached', timeout: 30000 });
+        const description = descriptions[target.split('/').pop()];
+        if (description) await page.fill('#pg-source-description', description);
         await page.setInputFiles('#pg-images', target);
         await page.waitForSelector('#pg-build-screenshot:not([disabled])', { timeout: 120000 });
         await page.click('#pg-build-screenshot');
@@ -25,8 +29,26 @@ async (page) => {
         await page.click('#pg-create-page');
         await page.waitForFunction(() => /Візуальна|не виконано|Не вдалося|помилк/i.test(document.querySelector('#pg-status').textContent), null, { timeout: 400000 }).catch(() => {});
         const text = (await page.textContent('#pg-status')).replace(/\s+/g, ' ');
+        // What the description became: counts, and one short line for everything that did not find its place on the page.
+        const behavior = description ? await page.evaluate(() => {
+            const report = jQuery('#page-generator-modal').data('schema').behavior || [];
+            const sum = { sentences: report.length, unknown: 0, bound: 0, unbound: 0, noElement: 0, issues: [] };
+            report.forEach((entry) => {
+                if (entry.action === 'unknown') { sum.unknown += 1; sum.issues.push('unknown: ' + entry.source); return; }
+                if (entry.action === 'anchors') {
+                    sum.bound += (entry.links || []).length; sum.unbound += (entry.unlinked || []).length;
+                    (entry.unlinked || []).forEach((label) => sum.issues.push('anchors: no section for ' + label));
+                    if (!entry.ok) { sum.noElement += 1; sum.issues.push('anchors: ' + (entry.message || 'not applied')); }
+                    return;
+                }
+                sum.bound += (entry.labels || []).length; sum.unbound += (entry.unbound || []).length;
+                (entry.unbound || []).forEach((label) => sum.issues.push(entry.action + ': not found ' + label));
+                if (!(entry.labels || []).length && !(entry.unbound || []).length) { sum.noElement += 1; sum.issues.push(entry.action + ': no element (' + entry.source.slice(0, 40) + ')'); }
+            });
+            return JSON.stringify(sum);
+        }) : undefined;
         const pick = (re) => { const m = text.match(re); return m ? parseFloat(m[1]) : null; };
-        return JSON.stringify({ file: target.split('/').pop(), visual: pick(/Візуальна відповідність:\s*([\d.]+)%/), perceptual: pick(/Перцептивна відповідність:\s*([\d.]+)%/), content: pick(/Змістова відповідність:\s*([\d.]+)%/), worstZone: pick(/найгірша зона:[^—]*—\s*([\d.]+)%/), text: pick(/Текстова відповідність:\s*([\d.]+)%/), dom: pick(/DOM-відповідність:\s*([\d.]+)%/), sizes: (text.match(/Reference: (\d+x\d+), rendered: (\d+x\d+)/) || []).slice(1).join(' -> '), tokens: (text.match(/tokens: (\d+ → \d+)/) || [])[1], links: await page.$$eval('#pg-status a', (links) => links.map((link) => link.href)), mode, failed: /Візуальна/.test(text) ? undefined : text.slice(0, 200) });
+        return JSON.stringify({ file: target.split('/').pop(), visual: pick(/Візуальна відповідність:\s*([\d.]+)%/), perceptual: pick(/Перцептивна відповідність:\s*([\d.]+)%/), content: pick(/Змістова відповідність:\s*([\d.]+)%/), worstZone: pick(/найгірша зона:[^—]*—\s*([\d.]+)%/), text: pick(/Текстова відповідність:\s*([\d.]+)%/), dom: pick(/DOM-відповідність:\s*([\d.]+)%/), sizes: (text.match(/Reference: (\d+x\d+), rendered: (\d+x\d+)/) || []).slice(1).join(' -> '), tokens: (text.match(/tokens: (\d+ → \d+)/) || [])[1], links: await page.$$eval('#pg-status a', (links) => links.map((link) => link.href)), mode, behavior, failed: /Візуальна/.test(text) ? undefined : text.slice(0, 200) });
     };
     // A page that does not come up (the editor sometimes reloads under the headless run) is retried once.
     for (const target of targets) {

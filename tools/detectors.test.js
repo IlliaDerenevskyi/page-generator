@@ -627,7 +627,8 @@ test('parseBehaviorIntents reads "the menu has N items, each leads to its sectio
     assert.deepEqual(parseBehaviorIntents('У верхньому меню є 4 пункти, кожен з них веде на відповідний розділ сторінки.').map((i) => [i.action, i.region, i.count]), [['anchors', 'top', 4]]);
     assert.deepEqual(parseBehaviorIntents('У нижньому меню три пункти, кожен веде до секції').map((i) => [i.region, i.count]), [['bottom', 3]]);
     assert.deepEqual(parseBehaviorIntents('The top menu has five items; each one scrolls to its section.').map((i) => [i.region, i.count]), [['top', 5]]);
-    assert.equal(parseBehaviorIntents('Кнопка Категорії відкриває випадаюче меню.').length, 0);
+    assert.deepEqual(parseBehaviorIntents('Кнопка Категорії відкриває випадаюче меню.').map((i) => [i.action, i.labels]), [['dropdown', ['Категорії']]]);
+    assert.deepEqual(parseBehaviorIntents('Щось дивне і незрозуміле.').map((i) => i.action), ['unknown']);
     assert.equal(parseBehaviorIntents('').length, 0);
 });
 
@@ -636,4 +637,44 @@ test('slugify makes a URL-safe anchor from a Ukrainian title', () => {
     assert.equal(slugify('Відгуки клієнтів!'), 'vidhuky-kliientiv');
     assert.equal(slugify('Щоденні знижки'), 'shchodenni-znyzhky');
     assert.equal(slugify('***'), '');
+});
+
+test('parseBehaviorIntents names the action, the elements and the list of a sentence', () => {
+    const one = (text) => parseBehaviorIntents(text)[0];
+    assert.deepEqual([one('Верхні вкладки Code, Issues, Pull requests та Actions перемикають розділи.').action, one('Верхні вкладки Code, Issues, Pull requests та Actions перемикають розділи.').labels], ['tabs', ['Code', 'Issues', 'Pull requests', 'Actions']]);
+    assert.deepEqual(one('Пункт Documentation відкриває випадаюче меню: Django 5.1, Django 4.2 та Django 3.2.').items, ['Django 5.1', 'Django 4.2', 'Django 3.2']);
+    assert.deepEqual(one('Cookie-вікно закривається кнопкою «Так, звісно».').labels, ['Так, звісно']);
+    assert.equal(one('Кнопка Old UI веде на https://example.com/old.').url, 'https://example.com/old');
+    assert.equal(one('Кнопка Docs веде на /docs/intro.').url, '/docs/intro');
+    // "розгортаються" contains "гортаються", which is not the carousel verb: words are matched from their start.
+    assert.equal(one('Групи Logs та SSH розгортаються і згортаються по кліку.').action, 'expand');
+    assert.equal(one('Блок Популярні послуги є каруселлю, стрілки гортають картки.').action, 'carousel');
+    assert.equal(parseBehaviorIntents('Кнопка Code відкриває меню. Кнопка Star додає репозиторій в обране.').length, 2);
+});
+
+test('every description in references/descriptions.json is understood by the dictionary', () => {
+    const descriptions = require('./references/descriptions.json');
+    Object.keys(descriptions).forEach((name) => {
+        const intents = parseBehaviorIntents(descriptions[name]);
+        assert.ok(intents.length > 0, name + ' gives no intent');
+        assert.deepEqual(intents.filter((intent) => intent.action === 'unknown').map((intent) => intent.source), [], name + ' has sentences the dictionary does not understand');
+    });
+});
+
+test('parseBehaviorIntents reads the section a link leads to when the sentence names it', () => {
+    const [intent] = parseBehaviorIntents('Пункт Послуги веде до розділу Напрями роботи.');
+    assert.deepEqual([intent.action, intent.labels, intent.target], ['link', ['Послуги'], 'Напрями роботи']);
+    assert.equal(parseBehaviorIntents('Кнопка Docs веде на https://x.org/docs.')[0].target, '');
+});
+
+test('parseBehaviorIntents keeps the label itself: no place words, no genitive nouns, no lowercase descriptions', () => {
+    const labels = (text) => parseBehaviorIntents(text).map((i) => i.labels);
+    assert.deepEqual(labels('Вибір мови English відкриває випадаючий список мов.'), [['English']]);
+    assert.deepEqual(labels('Вибір версії 3.15.0 відкриває випадаючий список версій Python.'), [['3.15.0']]);
+    assert.deepEqual(labels('Вибір Українська мова вгорі відкриває випадаючий список мов.'), [['Українська мова']]);
+    assert.deepEqual(labels('Стрілка вгору біля новини додає голос.'), [[]]);
+    assert.deepEqual(labels('Іконка користувача відкриває вікно входу.'), [[]]);
+    assert.deepEqual(labels('Перемикач теми змінює світлу й темну тему.'), [[]]);
+    assert.deepEqual(labels('Банер з кодом є каруселлю, кнопки 1, 2 та 3 перемикають слайди.'), [[]]);
+    assert.deepEqual(labels('Кнопка зберегти надсилає форму.'), [['зберегти']]);
 });

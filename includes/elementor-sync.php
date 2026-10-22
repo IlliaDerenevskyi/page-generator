@@ -238,6 +238,11 @@ trait Page_Generator_Elementor_Sync {
                 $node['content'] = $text;
                 $changed = true;
             }
+            // The address of a link: the link field of a heading, or the anchor inside a text editor.
+            if (($node['type'] ?? '') === 'link') {
+                $address = $widget === 'heading' ? ($settings['link']['url'] ?? '') : (preg_match('/<a\b[^>]*\bhref="([^"]*)"/i', (string) ($settings['editor'] ?? ''), $found) ? html_entity_decode($found[1]) : '');
+                if (is_string($address) && $address !== '' && ($node['behavior']['url'] ?? '#') !== $address) { $node['behavior']['url'] = esc_url_raw($address); $changed = true; }
+            }
             $size = $this->el_read_size($settings['typography_font_size'] ?? null);
             if ($size !== null) {
                 $old_size = $style['fontSize'] ?? ($node['settings']['fontSize'] ?? null);
